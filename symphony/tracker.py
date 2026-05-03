@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -136,12 +137,11 @@ class GitHubTrackerClient:
         self._repo = repo
         self._active_states = [s.lower() for s in active_states]
         self._terminal_states = [s.lower() for s in terminal_states]
-        # Recreate session to pick up new auth
+        # Mark session for recreation on next use (picks up new auth)
         if self._session and not self._session.closed:
-            # Will be recreated on next use
-            import asyncio
-            asyncio.ensure_future(self._session.close())
+            old = self._session
             self._session = None
+            asyncio.ensure_future(old.close())
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> Any:
         session = await self._get_session()

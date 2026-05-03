@@ -161,7 +161,7 @@ class Orchestrator:
 
     async def start(self) -> None:
         """Start the orchestrator: validate, cleanup terminals, begin polling."""
-        self._loop = asyncio.get_event_loop()
+        self._loop = asyncio.get_running_loop()
         self._running = True
 
         # Initial load
@@ -676,10 +676,6 @@ class Orchestrator:
         entry = self._state.running.pop(issue_id, None)
         if not entry:
             return
-
-        # Mark the entry so _handle_worker_exit knows this was reconciliation-driven
-        if entry.worker_task:
-            entry.worker_task._symphony_reconciled = True  # type: ignore[attr-defined]
 
         # Cancel worker task
         if entry.worker_task and not entry.worker_task.done():
