@@ -112,6 +112,17 @@ async def test_refresh_endpoint(mock_orchestrator, symphony_app, aiohttp_client)
 
 
 @pytest.mark.asyncio
+async def test_favicon_endpoint(symphony_app, aiohttp_client):
+    client = await aiohttp_client(symphony_app)
+    resp = await client.get("/favicon.ico")
+    assert resp.status == 200
+    assert resp.content_type == "image/svg+xml"
+    text = await resp.text()
+    assert "<svg" in text
+    assert resp.headers.get("Cache-Control") == "public, max-age=86400"
+
+
+@pytest.mark.asyncio
 async def test_unsupported_method(mock_orchestrator, symphony_app, aiohttp_client):
     client = await aiohttp_client(symphony_app)
     resp = await client.delete("/api/v1/state")
