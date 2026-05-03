@@ -752,8 +752,12 @@ class Orchestrator:
             self._state.claimed.discard(issue_id)
             return
 
-        # Re-validate config
+        # Re-validate config after potential reload
         self._check_workflow_reload()
+        cfg = self._effective_config()
+        if not cfg or not self._tracker:
+            self._state.claimed.discard(issue_id)
+            return
         errors = cfg.validate_dispatch()
         if errors:
             self._schedule_retry(
@@ -785,11 +789,19 @@ class Orchestrator:
             logger.info("retry_release issue_id=%s (not found in candidates)", issue_id)
             return
 
-        # Check slots
+        # Check global slots
         if self._available_slots() <= 0:
             self._schedule_retry(
                 issue_id, retry.attempt + 1, found.identifier,
                 error="no available orchestrator slots",
+            )
+            return
+
+        # Check per-state slots
+        if self._per_state_slots(found.state) <= 0:
+            self._schedule_retry(
+                issue_id, retry.attempt + 1, found.identifier,
+                error="no available per-state slots",
             )
             return
 

@@ -132,6 +132,8 @@ async def cleanup_workspace(
     key = sanitize_identifier(identifier)
     path = os.path.normpath(os.path.join(config.workspace_root, key))
 
+    validate_workspace_path(path, config.workspace_root)
+
     if not os.path.isdir(path):
         return
 

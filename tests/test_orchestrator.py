@@ -541,6 +541,38 @@ class TestOnRetry:
         assert "id1" in orch._state.retry_attempts
         assert orch._state.retry_attempts["id1"].error == "retry poll failed"
 
+    @pytest.mark.asyncio
+    async def test_retry_requeue_on_per_state_slots(self, tmp_path, monkeypatch):
+        """Retry requeues when per-state concurrency is exhausted."""
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        wf_path = tmp_path / "WORKFLOW.md"
+        wf_path.write_text(
+            "---\ntracker:\n  kind: github\n  repo: o/r\n"
+            "agent:\n  max_concurrent_agents: 10\n"
+            "  max_concurrent_agents_by_state:\n    open: 1\n---\nP"
+        )
+        orch = Orchestrator(str(wf_path))
+        orch._load_and_apply_workflow()
+        orch._loop = asyncio.get_event_loop()
+
+        orch._state.claimed.add("id2")
+        orch._state.retry_attempts["id2"] = RetryEntry(
+            issue_id="id2", identifier="#2", attempt=1,
+        )
+        # Fill the 1 open slot
+        orch._state.running["id1"] = RunningEntry(
+            issue_id="id1", identifier="#1", issue=_issue(id="id1"), state="open"
+        )
+
+        async def mock_fetch():
+            return [_issue(id="id2", identifier="#2", state="open")]
+        orch._tracker.fetch_candidate_issues = mock_fetch
+
+        await orch._on_retry("id2")
+
+        assert "id2" in orch._state.retry_attempts
+        assert orch._state.retry_attempts["id2"].error == "no available per-state slots"
+
 
 class TestReconcileNonActiveNonTerminal:
     """Test for state that is neither active nor terminal (SPEC §8.5 Part B)."""

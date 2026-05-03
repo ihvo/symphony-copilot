@@ -200,3 +200,11 @@ class TestSafetyInvariants:
         root = str(tmp_path / "workspaces")
         path = workspace_path_for(root, "#5")
         validate_workspace_path(path, root)
+
+    @pytest.mark.asyncio
+    async def test_cleanup_rejects_traversal(self, tmp_path):
+        """cleanup_workspace must reject identifiers that escape the root (§9.5)."""
+        cfg = _cfg(tmp_path)
+        os.makedirs(cfg.workspace_root, exist_ok=True)
+        with pytest.raises(InvalidWorkspacePathError):
+            await cleanup_workspace(cfg, "..")
