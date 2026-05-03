@@ -1,111 +1,90 @@
 # AGENTS.md
 
-## Project Overview
+Symphony is a Python asyncio service that polls GitHub Issues, creates per-issue workspaces, and runs Copilot SDK agent sessions. Spec: `SPEC.md`. Entry point: `symphony/cli.py`.
 
-Symphony is a long-running Python service that polls GitHub Issues, creates isolated per-issue workspaces, and runs Copilot SDK coding-agent sessions against each issue. It is a scheduler/runner and tracker reader — ticket writes are performed by the coding agent, not by Symphony.
+## Setup and Run
 
-The authoritative behavior specification is `SPEC.md` at the repo root.
+1. `uv sync`
+2. `uv run pytest` — runs all 206 tests (~30s)
+3. `uv run pytest tests/ -q` — unit tests only (<1s)
+4. `uv run symphony WORKFLOW.md` — run the service
+5. `uv run symphony WORKFLOW.md --port 8080` — with HTTP dashboard
 
-## Architecture
+## Module Map
 
 ```
-symphony/
-  cli.py              ← Entry point. Parses args, starts orchestrator + optional HTTP server.
-  orchestrator.py      ← Single-authority poll loop. Owns all mutable scheduling state.
-  config.py            ← Typed config layer. Resolves WORKFLOW.md front matter → runtime values.
-  workflow.py          ← Parses WORKFLOW.md (YAML front matter + prompt body).
-  prompt.py            ← Jinja2 strict-mode template rendering.
-  tracker.py           ← GitHub Issues REST client (fetch, paginate, normalize).
-  workspace.py         ← Per-issue workspace lifecycle (create, hooks, cleanup, safety).
-  runner.py            ← Copilot SDK subprocess client (JSONRPC-over-stdio, multi-turn).
-  server.py            ← Optional HTTP server extension (dashboard + JSON API).
-  models.py            ← Dataclasses for the domain model.
-  errors.py            ← Typed error hierarchy.
-  logging_config.py    ← Structured JSON logging to stderr.
+cli.py           → arg parsing, starts orchestrator + optional HTTP server
+orchestrator.py  → single-authority poll loop, all mutable state lives here
+config.py        → typed getters over WORKFLOW.md front matter (defaults, $VAR, ~)
+workflow.py      → parses WORKFLOW.md → {config map, prompt body}
+prompt.py        → Jinja2 strict-mode rendering
+tracker.py       → GitHub Issues REST client (paginate, normalize, refresh)
+workspace.py     → per-issue directory lifecycle + hook execution + safety checks
+runner.py        → Copilot SDK JSONRPC-over-stdio subprocess (multi-turn)
+server.py        → optional HTTP extension (dashboard + /api/v1/*)
+models.py        → dataclasses (Issue, RunningEntry, RetryEntry, OrchestratorState, …)
+errors.py        → typed error hierarchy with stable .code strings
 ```
 
-### Key design decisions
+## Making Changes
 
-- **asyncio single-writer**: The orchestrator is the only component that mutates scheduling state. Workers communicate back via an `asyncio.Queue` of immutable events. This avoids races without locks.
-- **Workspace safety invariants**: All workspace paths are sanitized (`[A-Za-z0-9._-]`), resolved to absolute, and validated to stay inside the workspace root before any filesystem operation or agent launch.
-- **Last-known-good config**: Invalid `WORKFLOW.md` reloads keep the previous working config. The service never crashes on a bad reload.
-- **Multi-turn sessions**: The agent runner keeps one subprocess alive across multiple turns on the same thread. The subprocess is only stopped when the worker attempt ends.
+### Adding a new config field
 
-## Development
+1. Add the property to `ServiceConfig` in `config.py` with a default value.
+2. If dispatch-critical, add validation in `ServiceConfig.validate_dispatch()`.
+3. Add a unit test in `tests/test_config.py`.
 
-### Prerequisites
+### Adding a new agent protocol event
 
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/) package manager
+1. Handle the event type in `CopilotSession.run_turn()` in `runner.py`.
+2. Emit via `self._emit("event_name", ...)` so the orchestrator receives it.
+3. If it affects orchestrator state, update `_handle_agent_event()` in `orchestrator.py`.
+4. Add a behavior to `tests/integration/mock_agent.py` and write an integration test.
 
-### Setup
+### Adding a new workspace hook
 
-```bash
-uv sync
-```
+1. Add the hook property in `config.py` (return `str | None`).
+2. Call `run_hook()` at the right lifecycle point in `workspace.py` or `orchestrator.py`.
+3. Document failure semantics: fatal (like `after_create`) or best-effort (like `after_run`).
 
-### Run tests
+## Where to Put Things
 
-```bash
-uv run pytest             # all 206 tests
-uv run pytest tests/ -q   # quick summary
-uv run pytest tests/integration/ -v  # integration tests only (64 tests, ~30s)
-```
+| Need | Location |
+|---|---|
+| New error type | `errors.py` — subclass `SymphonyError`, set `.code` |
+| New dataclass | `models.py` |
+| Config with default + validation | `config.py` `ServiceConfig` property |
+| Issue tracker API call | `tracker.py` `GitHubTrackerClient` method |
+| Filesystem operation on workspaces | `workspace.py` — always use `validate_workspace_path()` |
+| Scheduling state mutation | `orchestrator.py` — only in event-processing or tick methods |
+| New HTTP endpoint | `server.py` `_setup_routes()` |
 
-### Run the service
+## Critical Invariants
 
-```bash
-uv run symphony WORKFLOW.md              # basic
-uv run symphony WORKFLOW.md --port 8080  # with HTTP dashboard
-```
+- **Don't** mutate `OrchestratorState` from worker tasks. **Do** emit `WorkerResult` or `AgentEvent` to `self._event_queue` and let the orchestrator's event loop apply the mutation.
+- **Don't** construct workspace paths with string concatenation. **Do** use `workspace_path_for()` and `validate_workspace_path()` from `workspace.py`.
+- **Don't** read `WORKFLOW.md` directly in business logic. **Do** access values through `ServiceConfig` properties which handle defaults and `$VAR` resolution.
+- **Don't** create ad-hoc exception classes. **Do** add them to `errors.py` with a stable `.code` string.
+- **Don't** log raw API tokens. **Do** validate secret presence without printing values.
 
 ## Test Infrastructure
 
-Tests live in `tests/` (unit) and `tests/integration/` (integration).
+Unit tests in `tests/`, integration tests in `tests/integration/`.
 
-### Unit tests (142 tests, <1s)
+### Integration test components
 
-Fast, no I/O. Test each module in isolation with direct function calls and in-memory state.
+- **`FakeGitHub`** (`conftest.py`): in-process aiohttp server. Use `fake_github.add_issue(N, state="open")` to set up state, `fake_github.inject_error("list", 500)` to simulate failures.
+- **`mock_agent.py`**: standalone subprocess speaking JSONRPC. Configure via `agent_command({"turns": 2, "behavior": "success"})`. Behaviors: `success`, `fail`, `cancel`, `input_required`, `exit`, `hang`, `error_response`.
+- **`make_workflow`** fixture: generates `WORKFLOW.md` wired to fake server + mock agent.
 
-### Integration tests (64 tests, ~30s)
+### Writing an integration test
 
-Wire real components together. Two key pieces of infrastructure:
-
-- **`FakeGitHub`** (`tests/integration/conftest.py`): An in-process aiohttp server that mimics the GitHub Issues REST API. Supports `add_issue()`, `set_state()`, `inject_error()` for test setup. Tracks all requests in `request_log`.
-
-- **`mock_agent.py`** (`tests/integration/mock_agent.py`): A standalone Python script that speaks the JSONRPC-over-stdio protocol. Configure via JSON argument:
-  ```python
-  agent_command({"turns": 3, "behavior": "success"})               # 3 successful turns
-  agent_command({"behavior": "fail"})                               # turn failure
-  agent_command({"behavior": "hang", "turns": 1})                   # stall forever
-  agent_command({"approval_turn": 0, "turns": 1})                   # sends approval request
-  agent_command({"token_usage": {"input": 100, "output": 50}})      # emits token telemetry
-  ```
-
-- **`make_workflow`** fixture: Generates a `WORKFLOW.md` file wired to the fake GitHub server and mock agent. Handles YAML escaping properly via `yaml.dump`.
-
-### Adding a new integration test
-
-1. Pick the right file (`test_s17_N_*.py` matching the spec section).
-2. Use `fake_github` fixture to set up issue state.
-3. Use `make_workflow(endpoint=fake_github.base_url, ...)` to create the workflow.
-4. Start the orchestrator, use `wait_until(predicate)` for async assertions.
+1. Use `fake_github` fixture for issue state.
+2. Use `make_workflow(endpoint=fake_github.base_url, agent_cfg={...})`.
+3. Start orchestrator: `orch = Orchestrator(wf); await orch.start()`.
+4. Assert with `await wait_until(lambda: ..., timeout=5.0)`.
 5. Always `await orch.stop()` in a `finally` block.
 
-## Conventions
+## Spec Compliance
 
-- **Error types**: Every error class lives in `errors.py` with a stable `.code` string. Use the existing hierarchy — don't create ad-hoc exceptions.
-- **Logging**: Use `logging.getLogger("symphony.<module>")`. All logs are structured JSON. Include `issue_id` and `issue_identifier` in issue-related log messages.
-- **Config access**: Never read `WORKFLOW.md` directly in business logic. Use `ServiceConfig` properties which handle defaults, `$VAR` resolution, and validation.
-- **Workspace operations**: Always go through `workspace.py` functions. Never construct workspace paths manually — use `workspace_path_for()` and `validate_workspace_path()`.
-- **State mutations**: Only the orchestrator's event-processing loop mutates `OrchestratorState`. Workers emit `WorkerResult` or `AgentEvent` to the queue.
-
-## Spec Compliance Notes
-
-This implementation targets all `Core Conformance` requirements (SPEC §18.1) and the `HTTP Server Extension` (§13.7). It does **not** implement:
-
-- `github_graphql` client-side tool extension
-- Persistent retry queue across restarts
-- Tracker adapters beyond GitHub Issues
-
-The approval/sandbox policy is **high-trust**: auto-approve command execution, auto-approve file changes, fail on user-input-required. This is documented per SPEC §10.5.
+Targets all Core Conformance requirements (SPEC §18.1) plus the HTTP Server Extension (§13.7). Approval policy is high-trust: auto-approve commands/files, fail on user-input-required (SPEC §10.5). Not implemented: `github_graphql` tool, persistent retry queue, non-GitHub trackers.
