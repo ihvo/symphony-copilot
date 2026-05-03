@@ -74,6 +74,8 @@ async def test_dashboard_endpoint(mock_orchestrator, symphony_app, aiohttp_clien
     text = await resp.text()
     assert "Symphony Dashboard" in text
     assert "#1" in text
+    assert 'rel="icon"' in text
+    assert "data:image/svg+xml," in text
 
 
 @pytest.mark.asyncio

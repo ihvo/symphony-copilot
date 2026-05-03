@@ -151,6 +151,7 @@ def _render_dashboard(snapshot: dict) -> str:
     <title>Symphony Dashboard</title>
     <meta charset="utf-8">
     <meta http-equiv="refresh" content="10">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='30' fill='%23333'/><g fill='white'><ellipse cx='22' cy='42' rx='6' ry='4.5'/><ellipse cx='38' cy='36' rx='6' ry='4.5'/><rect x='27' y='14' width='3' height='28' rx='1.5'/><rect x='43' y='8' width='3' height='28' rx='1.5'/><path d='M30 14 C30 14 42 8 46 8 L46 18 C42 18 30 22 30 22Z'/></g></svg>">
     <style>
         body {{ font-family: system-ui, sans-serif; margin: 2rem; background: #f8f9fa; }}
         h1 {{ color: #333; }}

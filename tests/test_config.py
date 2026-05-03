@@ -139,8 +139,9 @@ class TestValidation:
         errors = cfg.validate_dispatch()
         assert any("tracker.repo" in e for e in errors)
 
-    def test_missing_copilot_command(self, monkeypatch):
+    def test_empty_copilot_command_still_valid(self, monkeypatch):
+        """copilot.command is no longer validated (SDK manages subprocess)."""
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
         cfg = _make_config({"tracker": {"kind": "github", "repo": "o/r"}, "copilot": {"command": ""}})
         errors = cfg.validate_dispatch()
-        assert any("copilot.command" in e for e in errors)
+        assert errors == []

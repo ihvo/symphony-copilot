@@ -255,3 +255,37 @@ async def wait_until(predicate, *, timeout: float = 5.0, poll: float = 0.05) -> 
             return True
         await asyncio.sleep(poll)
     return False
+
+
+@pytest.fixture
+def mock_agent_runner():
+    """Patch ``run_agent_session`` in the orchestrator module so that
+    workers succeed instantly without needing a real Copilot SDK session.
+
+    Yields a dict with ``calls`` list and ``fail_for`` set. Add issue IDs
+    to ``fail_for`` to make the mock raise for those issues.  Add issue IDs
+    to ``hang_for`` to make the mock sleep forever (for stall tests).
+    """
+    from unittest.mock import patch
+    from symphony.models import LiveSession
+
+    state: dict = {"calls": [], "fail_for": set(), "hang_for": set()}
+
+    async def fake_run(*, config, workspace_path, issue, prompt, attempt,
+                       on_event=None, max_turns=20, fetch_issue_state=None):
+        state["calls"].append({
+            "issue_id": issue.id,
+            "identifier": issue.identifier,
+            "prompt": prompt,
+            "attempt": attempt,
+        })
+        if issue.id in state["hang_for"]:
+            await asyncio.sleep(3600)  # hang until cancelled
+            return LiveSession(turn_count=0)
+        if issue.id in state["fail_for"]:
+            raise RuntimeError(f"mock failure for {issue.identifier}")
+        await asyncio.sleep(0.05)
+        return LiveSession(turn_count=1)
+
+    with patch("symphony.orchestrator.run_agent_session", side_effect=fake_run):
+        yield state

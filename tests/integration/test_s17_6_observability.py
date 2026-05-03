@@ -53,7 +53,7 @@ async def test_validation_failure_emitted_to_stderr(tmp_path, capfd, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_structured_logs_are_json(fake_github, make_workflow, tmp_path, capfd):
+async def test_structured_logs_are_json(fake_github, make_workflow, tmp_path, capfd, mock_agent_runner):
     """All log lines are parseable JSON with required fields."""
     configure_logging("INFO")
     fake_github.add_issue(1, state="open")
