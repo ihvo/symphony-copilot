@@ -14,6 +14,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("symphony.server")
 
+# Inline SVG favicon – music notes on a dark circle (fits the "Symphony" theme).
+FAVICON_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
+    "<circle cx='32' cy='32' r='30' fill='%23333'/>"
+    "<g fill='white'>"
+    "<ellipse cx='22' cy='42' rx='6' ry='4.5'/>"
+    "<ellipse cx='38' cy='36' rx='6' ry='4.5'/>"
+    "<rect x='27' y='14' width='3' height='28' rx='1.5'/>"
+    "<rect x='43' y='8' width='3' height='28' rx='1.5'/>"
+    "<path d='M30 14 C30 14 42 8 46 8 L46 18 C42 18 30 22 30 22Z'/>"
+    "</g></svg>"
+)
+
 
 def _json_response(data: dict, status: int = 200) -> web.Response:
     return web.Response(
@@ -39,6 +52,7 @@ class SymphonyServer:
 
     def _setup_routes(self) -> None:
         self._app.router.add_get("/", self._handle_dashboard)
+        self._app.router.add_get("/favicon.ico", self._handle_favicon)
         self._app.router.add_get("/api/v1/state", self._handle_state)
         self._app.router.add_get("/api/v1/{identifier}", self._handle_issue)
         self._app.router.add_post("/api/v1/refresh", self._handle_refresh)
@@ -64,6 +78,15 @@ class SymphonyServer:
         logger.info("http_server_stopped")
 
     # --- Handlers ---
+
+    async def _handle_favicon(self, request: web.Request) -> web.Response:
+        """Serve the favicon as an SVG image."""
+        svg = FAVICON_SVG.replace("%23", "#")
+        return web.Response(
+            text=svg,
+            content_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
 
     async def _handle_dashboard(self, request: web.Request) -> web.Response:
         """Serve a human-readable HTML dashboard."""
@@ -151,7 +174,7 @@ def _render_dashboard(snapshot: dict) -> str:
     <title>Symphony Dashboard</title>
     <meta charset="utf-8">
     <meta http-equiv="refresh" content="10">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='30' fill='%23333'/><g fill='white'><ellipse cx='22' cy='42' rx='6' ry='4.5'/><ellipse cx='38' cy='36' rx='6' ry='4.5'/><rect x='27' y='14' width='3' height='28' rx='1.5'/><rect x='43' y='8' width='3' height='28' rx='1.5'/><path d='M30 14 C30 14 42 8 46 8 L46 18 C42 18 30 22 30 22Z'/></g></svg>">
+    <link rel="icon" href="data:image/svg+xml,{FAVICON_SVG}">
     <style>
         body {{ font-family: system-ui, sans-serif; margin: 2rem; background: #f8f9fa; }}
         h1 {{ color: #333; }}
