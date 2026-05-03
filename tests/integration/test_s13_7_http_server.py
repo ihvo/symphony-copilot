@@ -81,13 +81,13 @@ async def test_issue_detail_not_found(fake_github, make_workflow, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_issue_detail_found(fake_github, make_workflow, tmp_path):
+async def test_issue_detail_found(fake_github, make_workflow, tmp_path, mock_agent_runner):
     """GET /api/v1/<id> returns detail for a running issue."""
     fake_github.add_issue(5, state="open")
+    mock_agent_runner["hang_for"].add("NODE_5")
     wf = make_workflow(
         endpoint=fake_github.base_url,
         max_turns=1,
-        agent_cfg={"turns": 1, "slow_turn_ms": 3000},
     )
     orch = Orchestrator(wf)
     await orch.start()
@@ -149,13 +149,13 @@ async def test_method_not_allowed(fake_github, make_workflow, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dashboard_xss_escaping(fake_github, make_workflow, tmp_path):
+async def test_dashboard_xss_escaping(fake_github, make_workflow, tmp_path, mock_agent_runner):
     """Issue content with HTML is escaped in the dashboard."""
     fake_github.add_issue(1, state="open", title='<script>alert("xss")</script>')
+    mock_agent_runner["hang_for"].add("NODE_1")
     wf = make_workflow(
         endpoint=fake_github.base_url,
         max_turns=1,
-        agent_cfg={"turns": 1, "slow_turn_ms": 2000},
     )
     orch = Orchestrator(wf)
     await orch.start()

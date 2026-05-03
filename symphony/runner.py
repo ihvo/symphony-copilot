@@ -1,17 +1,20 @@
-"""Agent runner – Copilot SDK subprocess client.
+"""Agent runner – Copilot SDK Python client.
 
-Manages the lifecycle of a coding-agent app-server subprocess:
-launch, session init, multi-turn execution, event streaming, and cleanup.
+Uses the ``github-copilot-sdk`` Python package (``CopilotClient`` /
+``CopilotSession``) instead of raw JSONRPC-over-stdio.  The SDK manages
+subprocess lifecycle, session protocol, and event streaming internally.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Callable
+
+from copilot import CopilotClient, SubprocessConfig
+from copilot.session import PermissionHandler
 
 from symphony.config import ServiceConfig
 from symphony.errors import (
@@ -28,8 +31,6 @@ from symphony.models import AgentEvent, Issue, LiveSession
 
 logger = logging.getLogger("symphony.runner")
 
-_MAX_LINE_SIZE = 10 * 1024 * 1024  # 10 MB
-
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -39,10 +40,11 @@ def _make_session_id(thread_id: str, turn_id: str) -> str:
     return f"{thread_id}-{turn_id}"
 
 
-class CopilotSession:
-    """Manages a live Copilot SDK app-server subprocess session.
+class CopilotAgentSession:
+    """Manages a live Copilot SDK session with multi-turn support.
 
-    Supports multiple turns on the same thread within one subprocess lifetime.
+    Wraps ``CopilotClient`` + ``CopilotSession`` and translates SDK events
+    into Symphony ``AgentEvent`` objects for the orchestrator.
     """
 
     def __init__(
@@ -53,34 +55,26 @@ class CopilotSession:
         on_event: Callable[[AgentEvent], None] | None = None,
     ) -> None:
         self._config = config
-        self._workspace = workspace_path
+        self._workspace = os.path.abspath(workspace_path)
         self._issue = issue
         self._on_event = on_event
-        self._process: asyncio.subprocess.Process | None = None
-        self._thread_id: str = ""
-        self._turn_id: str = ""
-        self._request_id: int = 0
+        self._client: CopilotClient | None = None
+        self._sdk_session: Any = None  # CopilotSession from SDK
         self._session = LiveSession()
         self._started = False
-        self._stderr_task: asyncio.Task | None = None
+        self._session_id_str: str = ""
 
     @property
     def session(self) -> LiveSession:
         return self._session
-
-    def _next_id(self) -> int:
-        self._request_id += 1
-        return self._request_id
 
     def _emit(self, event_name: str, **kwargs: Any) -> None:
         evt = AgentEvent(
             event=event_name,
             issue_id=self._issue.id,
             timestamp=_now_utc(),
-            copilot_pid=str(self._process.pid) if self._process else None,
+            copilot_pid=self._session.copilot_pid,
             session_id=self._session.session_id or None,
-            thread_id=self._thread_id or None,
-            turn_id=self._turn_id or None,
             **kwargs,
         )
         self._session.last_copilot_event = event_name
@@ -90,231 +84,22 @@ class CopilotSession:
         if self._on_event:
             self._on_event(evt)
 
-    async def _drain_stderr(self) -> None:
-        """Read and log stderr to prevent pipe buffer deadlock."""
-        if not self._process or not self._process.stderr:
-            return
-        try:
-            while True:
-                line = await self._process.stderr.readline()
-                if not line:
-                    break
-                text = line.decode(errors="replace").rstrip()
-                if text:
-                    logger.debug("agent_stderr issue=%s: %s", self._issue.identifier, text[:500])
-        except Exception:
-            pass
+    def _handle_sdk_event(self, event: Any) -> None:
+        """Process a SessionEvent from the SDK and update session state."""
+        event_type = event.type.value if hasattr(event.type, "value") else str(event.type)
+        data = event.data
 
-    async def _write_message(self, msg: dict[str, Any]) -> None:
-        """Write a JSON-RPC message to the subprocess stdin."""
-        if not self._process or not self._process.stdin:
-            raise PortExitError(None)
-        line = json.dumps(msg) + "\n"
-        self._process.stdin.write(line.encode())
-        await self._process.stdin.drain()
+        # Update last-event timestamp
+        self._session.last_copilot_event = event_type
+        self._session.last_copilot_timestamp = _now_utc()
 
-    async def _read_message(self, timeout_ms: int | None = None) -> dict[str, Any]:
-        """Read one JSON line from subprocess stdout."""
-        if not self._process or not self._process.stdout:
-            raise PortExitError(None)
-        timeout = (timeout_ms or self._config.copilot_read_timeout_ms) / 1000.0
-        try:
-            line = await asyncio.wait_for(
-                self._process.stdout.readline(),
-                timeout=timeout,
-            )
-        except asyncio.TimeoutError:
-            raise ResponseTimeoutError("Read timed out")
-        if not line:
-            rc = self._process.returncode
-            raise PortExitError(rc)
-        try:
-            return json.loads(line)
-        except json.JSONDecodeError:
-            logger.warning("malformed_json line=%s", line[:200])
-            self._emit("malformed", message=line.decode(errors="replace")[:200])
-            return {"malformed": True}
-
-    async def start(self) -> None:
-        """Launch the subprocess and initialize the app-server session."""
-        # Validate workspace cwd
-        abs_workspace = os.path.abspath(self._workspace)
-        if not os.path.isdir(abs_workspace):
-            raise InvalidWorkspaceCwdError(abs_workspace, "does not exist")
-
-        cmd = self._config.copilot_command
-        logger.info(
-            "agent_launch command=%r cwd=%s issue=%s",
-            cmd, abs_workspace, self._issue.identifier,
-        )
-
-        try:
-            self._process = await asyncio.create_subprocess_exec(
-                "bash", "-lc", cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=abs_workspace,
-                limit=_MAX_LINE_SIZE,
-            )
-        except FileNotFoundError:
-            raise CopilotNotFoundError(cmd)
-
-        self._session.copilot_pid = str(self._process.pid)
-
-        # Start background stderr drainer to prevent deadlocks
-        self._stderr_task = asyncio.ensure_future(self._drain_stderr())
-
-        # Initialize session – send initialization request
-        init_msg = {
-            "jsonrpc": "2.0",
-            "id": self._next_id(),
-            "method": "initialize",
-            "params": {
-                "clientInfo": {"name": "symphony", "version": "0.1.0"},
-                "capabilities": {},
-            },
-        }
-        await self._write_message(init_msg)
-        resp = await self._read_message(self._config.copilot_read_timeout_ms)
-
-        # Create thread
-        thread_msg = {
-            "jsonrpc": "2.0",
-            "id": self._next_id(),
-            "method": "thread/create",
-            "params": {
-                "cwd": abs_workspace,
-            },
-        }
-        if self._config.copilot_thread_sandbox:
-            thread_msg["params"]["sandbox"] = self._config.copilot_thread_sandbox
-        await self._write_message(thread_msg)
-        thread_resp = await self._read_message(self._config.copilot_read_timeout_ms)
-
-        # Extract thread_id from response
-        result = thread_resp.get("result", {})
-        self._thread_id = str(result.get("threadId", result.get("id", f"thread-{self._process.pid}")))
-        self._session.thread_id = self._thread_id
-        self._started = True
-
-        self._emit("session_started", message=f"Thread {self._thread_id} created")
-
-    async def run_turn(self, prompt: str, turn_number: int = 1) -> bool:
-        """Run one coding-agent turn. Returns True on success, raises on failure."""
-        if not self._started or not self._process:
-            raise PortExitError(None)
-
-        turn_msg = {
-            "jsonrpc": "2.0",
-            "id": self._next_id(),
-            "method": "turn/start",
-            "params": {
-                "threadId": self._thread_id,
-                "message": prompt,
-                "cwd": os.path.abspath(self._workspace),
-                "title": f"{self._issue.identifier}: {self._issue.title}",
-            },
-        }
-        if self._config.copilot_approval_policy:
-            turn_msg["params"]["approvalPolicy"] = self._config.copilot_approval_policy
-        if self._config.copilot_turn_sandbox_policy:
-            turn_msg["params"]["sandboxPolicy"] = self._config.copilot_turn_sandbox_policy
-
-        await self._write_message(turn_msg)
-
-        self._session.turn_count += 1
-        turn_timeout = self._config.copilot_turn_timeout_ms / 1000.0
-        turn_start = asyncio.get_event_loop().time()
-
-        while True:
-            elapsed = asyncio.get_event_loop().time() - turn_start
-            remaining = turn_timeout - elapsed
-            if remaining <= 0:
-                raise TurnTimeoutError()
-
-            try:
-                msg = await self._read_message(int(remaining * 1000))
-            except ResponseTimeoutError:
-                raise TurnTimeoutError()
-            except PortExitError:
-                raise
-
-            if msg.get("malformed"):
-                continue
-
-            # Process the message
-            method = msg.get("method", "")
-            params = msg.get("params", {})
-            msg_id = msg.get("id")
-            result = msg.get("result", {})
-
-            # Handle JSON-RPC response (result for our turn/start request)
-            if "result" in msg and not method:
-                turn_result = result
-                self._turn_id = str(turn_result.get("turnId", turn_result.get("id", f"turn-{turn_number}")))
-                self._session.turn_id = self._turn_id
-                self._session.session_id = _make_session_id(self._thread_id, self._turn_id)
-                continue
-
-            # Handle error response
-            if "error" in msg and not method:
-                error = msg["error"]
-                err_msg = error.get("message", str(error))
-                raise TurnFailedError(err_msg)
-
-            # Handle notifications/events from the server
-            event_type = method or params.get("type", "")
-
-            if event_type in ("turn/completed", "turn/finished"):
-                self._emit("turn_completed", message="Turn completed")
-                return True
-
-            elif event_type in ("turn/failed", "turn/error"):
-                err = params.get("error", params.get("message", "unknown"))
-                self._emit("turn_failed", error=str(err))
-                raise TurnFailedError(str(err))
-
-            elif event_type == "turn/cancelled":
-                self._emit("turn_cancelled")
-                raise TurnCancelledError()
-
-            elif event_type == "turn/inputRequired":
-                self._emit("turn_input_required")
-                raise TurnInputRequiredError()
-
-            elif event_type == "approval/requested":
-                # Auto-approve (high-trust policy)
-                if msg_id is not None:
-                    approve_resp = {
-                        "jsonrpc": "2.0",
-                        "id": msg_id,
-                        "result": {"approved": True},
-                    }
-                    await self._write_message(approve_resp)
-                self._emit("approval_auto_approved", message="Auto-approved")
-
-            elif event_type == "tool/called":
-                tool_name = params.get("name", "")
-                # Handle unsupported tool calls
-                if msg_id is not None:
-                    tool_resp = {
-                        "jsonrpc": "2.0",
-                        "id": msg_id,
-                        "result": {
-                            "success": False,
-                            "error": f"Tool '{tool_name}' is not supported",
-                        },
-                    }
-                    await self._write_message(tool_resp)
-                self._emit("unsupported_tool_call", message=f"Unsupported tool: {tool_name}")
-
-            elif event_type in ("thread/tokenUsage/updated",):
-                # Extract token usage
-                usage = params.get("usage", params)
-                inp = usage.get("inputTokens", usage.get("input_tokens", 0))
-                out = usage.get("outputTokens", usage.get("output_tokens", 0))
-                total = usage.get("totalTokens", usage.get("total_tokens", inp + out))
+        # Extract token usage from usage events
+        if event_type == "assistant.usage" and data:
+            usage = getattr(data, "usage", None) or getattr(data, "content", None)
+            if usage:
+                inp = getattr(usage, "input_tokens", 0) or 0
+                out = getattr(usage, "output_tokens", 0) or 0
+                total = getattr(usage, "total_tokens", inp + out) or (inp + out)
                 self._session.copilot_input_tokens = int(inp)
                 self._session.copilot_output_tokens = int(out)
                 self._session.copilot_total_tokens = int(total)
@@ -323,44 +108,122 @@ class CopilotSession:
                     usage={"input_tokens": int(inp), "output_tokens": int(out), "total_tokens": int(total)},
                 )
 
-            elif event_type.startswith("rateLimit"):
-                self._emit("notification", rate_limits=params)
+        elif event_type == "session.idle":
+            self._emit("turn_completed", message="Session idle")
 
-            else:
-                summary = str(params.get("message", params.get("text", "")))[:200]
-                self._emit("other_message", message=summary or event_type)
+        elif event_type == "session.error":
+            msg = str(getattr(data, "message", data)) if data else "unknown error"
+            self._emit("turn_failed", error=msg, message=msg)
+
+        elif event_type == "assistant.message":
+            content = str(getattr(data, "content", "")) if data else ""
+            self._session.last_copilot_message = content[:200]
+            self._emit("notification", message=content[:200])
+
+        elif event_type == "assistant.turn_start":
+            self._emit("notification", message="Turn started")
+
+        elif event_type == "assistant.turn_end":
+            self._emit("notification", message="Turn ended")
+
+        elif event_type == "session.usage_info":
+            # Rate-limit or usage info
+            if data:
+                self._emit("notification", rate_limits={"data": str(data)})
+
+    async def start(self) -> None:
+        """Launch the Copilot SDK client and create a session."""
+        if not os.path.isdir(self._workspace):
+            raise InvalidWorkspaceCwdError(self._workspace, "does not exist")
+
+        logger.info(
+            "agent_launch cwd=%s issue=%s",
+            self._workspace, self._issue.identifier,
+        )
+
+        # Build SubprocessConfig
+        subprocess_cfg = SubprocessConfig(
+            cwd=self._workspace,
+            github_token=self._config.tracker_api_key or None,
+        )
+
+        try:
+            self._client = CopilotClient(subprocess_cfg)
+            await self._client.start()
+        except FileNotFoundError as exc:
+            raise CopilotNotFoundError(str(exc)) from exc
+        except Exception as exc:
+            raise PortExitError(None) from exc
+
+        # Create SDK session
+        try:
+            self._sdk_session = await self._client.create_session(
+                on_permission_request=PermissionHandler.approve_all,
+                working_directory=self._workspace,
+                on_event=self._handle_sdk_event,
+            )
+        except Exception as exc:
+            logger.error("session_create_failed issue=%s error=%s", self._issue.identifier, exc)
+            await self.stop()
+            raise PortExitError(None) from exc
+
+        self._session.thread_id = str(getattr(self._sdk_session, "session_id", "") or "")
+        self._session.session_id = self._session.thread_id
+        self._started = True
+
+        self._emit("session_started", message=f"Session {self._session.thread_id} created")
+
+    async def run_turn(self, prompt: str, turn_number: int = 1) -> bool:
+        """Run one coding-agent turn using send_and_wait. Returns True on success."""
+        if not self._started or not self._sdk_session:
+            raise PortExitError(None)
+
+        self._session.turn_count += 1
+        self._session.turn_id = f"turn-{turn_number}"
+        self._session.session_id = _make_session_id(self._session.thread_id, self._session.turn_id)
+
+        turn_timeout = self._config.copilot_turn_timeout_ms / 1000.0
+
+        try:
+            result = await self._sdk_session.send_and_wait(
+                prompt,
+                timeout=turn_timeout,
+            )
+        except asyncio.TimeoutError:
+            raise TurnTimeoutError()
+        except Exception as exc:
+            err_str = str(exc).lower()
+            if "cancel" in err_str:
+                raise TurnCancelledError()
+            elif "input" in err_str and "required" in err_str:
+                raise TurnInputRequiredError()
+            raise TurnFailedError(str(exc))
+
+        # Check result event type if available
+        if result:
+            event_type = getattr(result.type, "value", "") if hasattr(result, "type") else ""
+            if event_type == "session.error":
+                msg = str(getattr(result.data, "message", result.data)) if result.data else "turn failed"
+                raise TurnFailedError(msg)
+
+        self._emit("turn_completed", message=f"Turn {turn_number} completed")
+        return True
 
     async def stop(self) -> None:
-        """Shut down the app-server subprocess."""
-        # Cancel stderr drainer
-        if self._stderr_task and not self._stderr_task.done():
-            self._stderr_task.cancel()
+        """Shut down the SDK session and client."""
+        if self._sdk_session:
             try:
-                await self._stderr_task
-            except (asyncio.CancelledError, Exception):
+                await self._sdk_session.disconnect()
+            except Exception:
                 pass
+            self._sdk_session = None
 
-        if not self._process:
-            return
-        try:
-            # Send shutdown
-            shutdown_msg = {
-                "jsonrpc": "2.0",
-                "id": self._next_id(),
-                "method": "shutdown",
-                "params": {},
-            }
-            if self._process.stdin and not self._process.stdin.is_closing():
-                await self._write_message(shutdown_msg)
-                self._process.stdin.close()
-        except Exception:
-            pass
-
-        try:
-            await asyncio.wait_for(self._process.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
-            self._process.kill()
-            await self._process.wait()
+        if self._client:
+            try:
+                await self._client.stop()
+            except Exception:
+                pass
+            self._client = None
 
         self._started = False
 
@@ -379,7 +242,7 @@ async def run_agent_session(
 
     Returns the final :class:`LiveSession` state.
     """
-    session = CopilotSession(config, workspace_path, issue, on_event=on_event)
+    session = CopilotAgentSession(config, workspace_path, issue, on_event=on_event)
 
     try:
         await session.start()
@@ -412,7 +275,6 @@ async def run_agent_session(
                 break
 
             turn_number += 1
-            # Continuation turns use guidance, not the full prompt
             current_prompt = (
                 "Continue working on the issue. Review your previous progress "
                 "and continue from where you left off."

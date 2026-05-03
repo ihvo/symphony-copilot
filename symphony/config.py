@@ -261,6 +261,4 @@ class ServiceConfig:
             errors.append("tracker.api_key is missing after $VAR resolution")
         if self.tracker_kind == "github" and not self.tracker_repo:
             errors.append("tracker.repo is required when tracker.kind is 'github'")
-        if not self.copilot_command:
-            errors.append("copilot.command is required and must be non-empty")
         return errors
