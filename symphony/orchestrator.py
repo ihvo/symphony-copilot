@@ -485,20 +485,26 @@ class Orchestrator:
     def _handle_worker_exit(self, result: WorkerResult) -> None:
         """Handle a worker completion/failure."""
         entry = self._state.running.pop(result.issue_id, None)
-        if entry:
-            # Accumulate runtime
-            if entry.started_at:
-                elapsed = (_now_utc() - entry.started_at).total_seconds()
-                self._state.copilot_totals.seconds_running += elapsed
 
-            # Accumulate tokens from the session
-            session = result.session
-            delta_in = session.copilot_input_tokens - session.last_reported_input_tokens
-            delta_out = session.copilot_output_tokens - session.last_reported_output_tokens
-            delta_total = session.copilot_total_tokens - session.last_reported_total_tokens
-            self._state.copilot_totals.input_tokens += max(delta_in, 0)
-            self._state.copilot_totals.output_tokens += max(delta_out, 0)
-            self._state.copilot_totals.total_tokens += max(delta_total, 0)
+        # If this worker was already removed by reconciliation, skip retry
+        if entry is None:
+            # Check if reconciliation already handled this issue
+            # (running entry was popped by _terminate_running)
+            return
+
+        # Accumulate runtime
+        if entry.started_at:
+            elapsed = (_now_utc() - entry.started_at).total_seconds()
+            self._state.copilot_totals.seconds_running += elapsed
+
+        # Accumulate tokens from the session
+        session = result.session
+        delta_in = session.copilot_input_tokens - session.last_reported_input_tokens
+        delta_out = session.copilot_output_tokens - session.last_reported_output_tokens
+        delta_total = session.copilot_total_tokens - session.last_reported_total_tokens
+        self._state.copilot_totals.input_tokens += max(delta_in, 0)
+        self._state.copilot_totals.output_tokens += max(delta_out, 0)
+        self._state.copilot_totals.total_tokens += max(delta_total, 0)
 
         if result.success:
             self._state.completed.add(result.issue_id)
@@ -655,15 +661,25 @@ class Orchestrator:
                 entry.issue = refreshed_issue
                 entry.state = state
             else:
-                # Non-active, non-terminal: stop without cleanup
+                # Non-active, non-terminal: stop without cleanup, release claim
                 logger.info("reconcile_non_active issue_id=%s state=%s", issue_id, state)
                 await self._terminate_running(issue_id, cleanup_workspace=False)
+                self._state.claimed.discard(issue_id)
 
     async def _terminate_running(self, issue_id: str, cleanup_workspace: bool) -> None:
-        """Terminate a running worker and optionally clean its workspace."""
+        """Terminate a running worker and optionally clean its workspace.
+
+        Note: this does NOT release the claim. Callers that need the claim
+        released (e.g. reconciliation with no retry) must do so explicitly.
+        Callers that schedule a retry keep the claim via the retry entry.
+        """
         entry = self._state.running.pop(issue_id, None)
         if not entry:
             return
+
+        # Mark the entry so _handle_worker_exit knows this was reconciliation-driven
+        if entry.worker_task:
+            entry.worker_task._symphony_reconciled = True  # type: ignore[attr-defined]
 
         # Cancel worker task
         if entry.worker_task and not entry.worker_task.done():
@@ -678,11 +694,9 @@ class Orchestrator:
             elapsed = (_now_utc() - entry.started_at).total_seconds()
             self._state.copilot_totals.seconds_running += elapsed
 
-        # Release claim
-        self._state.claimed.discard(issue_id)
-
-        # Cleanup workspace if terminal
+        # Cleanup workspace if terminal; also release claim for terminal cases
         if cleanup_workspace:
+            self._state.claimed.discard(issue_id)
             cfg = self._effective_config()
             if cfg:
                 try:

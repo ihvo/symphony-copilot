@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 from typing import TYPE_CHECKING
@@ -108,6 +109,11 @@ class SymphonyServer:
         )
 
 
+def _esc(val: object) -> str:
+    """HTML-escape a value for safe interpolation."""
+    return html.escape(str(val))
+
+
 def _render_dashboard(snapshot: dict) -> str:
     """Render a minimal HTML dashboard from a state snapshot."""
     running = snapshot.get("running", [])
@@ -119,24 +125,24 @@ def _render_dashboard(snapshot: dict) -> str:
     for r in running:
         running_rows += f"""
         <tr>
-            <td>{r.get('issue_identifier','')}</td>
-            <td>{r.get('state','')}</td>
-            <td>{r.get('session_id','')}</td>
-            <td>{r.get('turn_count',0)}</td>
-            <td>{r.get('last_event','')}</td>
-            <td>{r.get('last_message','')[:60]}</td>
-            <td>{r.get('started_at','')}</td>
-            <td>{r.get('tokens',{}).get('total_tokens',0)}</td>
+            <td>{_esc(r.get('issue_identifier',''))}</td>
+            <td>{_esc(r.get('state',''))}</td>
+            <td>{_esc(r.get('session_id',''))}</td>
+            <td>{_esc(r.get('turn_count',0))}</td>
+            <td>{_esc(r.get('last_event',''))}</td>
+            <td>{_esc(str(r.get('last_message',''))[:60])}</td>
+            <td>{_esc(r.get('started_at',''))}</td>
+            <td>{_esc(r.get('tokens',{}).get('total_tokens',0))}</td>
         </tr>"""
 
     retry_rows = ""
     for r in retrying:
         retry_rows += f"""
         <tr>
-            <td>{r.get('issue_identifier','')}</td>
-            <td>{r.get('attempt',0)}</td>
-            <td>{r.get('due_at','')}</td>
-            <td>{r.get('error','')[:60]}</td>
+            <td>{_esc(r.get('issue_identifier',''))}</td>
+            <td>{_esc(r.get('attempt',0))}</td>
+            <td>{_esc(r.get('due_at',''))}</td>
+            <td>{_esc(str(r.get('error',''))[:60])}</td>
         </tr>"""
 
     return f"""<!DOCTYPE html>

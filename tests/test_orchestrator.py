@@ -465,3 +465,145 @@ class TestWorkerExitHandling:
         assert "id1" in orch._state.retry_attempts
         assert orch._state.retry_attempts["id1"].attempt == 3
 
+
+class TestOnRetry:
+    """Tests for retry timer handling (SPEC §8.4, §16.6)."""
+
+    def _make_orch(self, tmp_path, monkeypatch) -> Orchestrator:
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        wf_path = tmp_path / "WORKFLOW.md"
+        wf_path.write_text("---\ntracker:\n  kind: github\n  repo: o/r\n---\nP")
+        orch = Orchestrator(str(wf_path))
+        orch._load_and_apply_workflow()
+        orch._loop = asyncio.new_event_loop()
+        return orch
+
+    @pytest.mark.asyncio
+    async def test_retry_release_when_not_found(self, tmp_path, monkeypatch):
+        """Retry releases claim when issue is no longer a candidate."""
+        orch = self._make_orch(tmp_path, monkeypatch)
+        orch._state.claimed.add("id1")
+        orch._state.retry_attempts["id1"] = RetryEntry(
+            issue_id="id1", identifier="#1", attempt=1,
+        )
+
+        # Mock tracker returns no matching issue
+        async def mock_fetch():
+            return [_issue(id="other", identifier="#99")]
+        orch._tracker.fetch_candidate_issues = mock_fetch
+
+        await orch._on_retry("id1")
+
+        # Claim should be released
+        assert "id1" not in orch._state.claimed
+        assert "id1" not in orch._state.retry_attempts
+
+    @pytest.mark.asyncio
+    async def test_retry_requeue_on_no_slots(self, tmp_path, monkeypatch):
+        """Retry requeues when no slots are available."""
+        orch = self._make_orch(tmp_path, monkeypatch)
+        orch._state.claimed.add("id1")
+        orch._state.retry_attempts["id1"] = RetryEntry(
+            issue_id="id1", identifier="#1", attempt=2,
+        )
+        # Fill all slots
+        for i in range(10):
+            orch._state.running[f"s{i}"] = RunningEntry(
+                issue_id=f"s{i}", identifier=f"#{i}", issue=_issue(id=f"s{i}"), state="open"
+            )
+
+        async def mock_fetch():
+            return [_issue(id="id1")]
+        orch._tracker.fetch_candidate_issues = mock_fetch
+
+        await orch._on_retry("id1")
+
+        # Should be requeued with incremented attempt
+        assert "id1" in orch._state.retry_attempts
+        assert orch._state.retry_attempts["id1"].attempt == 3
+        assert orch._state.retry_attempts["id1"].error == "no available orchestrator slots"
+
+    @pytest.mark.asyncio
+    async def test_retry_requeue_on_fetch_failure(self, tmp_path, monkeypatch):
+        """Retry requeues when candidate fetch fails."""
+        orch = self._make_orch(tmp_path, monkeypatch)
+        orch._state.claimed.add("id1")
+        orch._state.retry_attempts["id1"] = RetryEntry(
+            issue_id="id1", identifier="#1", attempt=1,
+        )
+
+        async def mock_fail():
+            raise RuntimeError("network error")
+        orch._tracker.fetch_candidate_issues = mock_fail
+
+        await orch._on_retry("id1")
+
+        assert "id1" in orch._state.retry_attempts
+        assert orch._state.retry_attempts["id1"].error == "retry poll failed"
+
+
+class TestReconcileNonActiveNonTerminal:
+    """Test for state that is neither active nor terminal (SPEC §8.5 Part B)."""
+
+    @pytest.mark.asyncio
+    async def test_stops_without_cleanup(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        wf_path = tmp_path / "WORKFLOW.md"
+        wf_path.write_text(
+            "---\ntracker:\n  kind: github\n  repo: o/r\n"
+            "  active_states: [open]\n  terminal_states: [closed]\n---\nP"
+        )
+        orch = Orchestrator(str(wf_path))
+        orch._load_and_apply_workflow()
+        orch._loop = asyncio.get_event_loop()
+
+        # Create workspace so we can verify it's NOT cleaned
+        import os
+        ws_root = orch._effective_config().workspace_root
+        ws_path = os.path.join(ws_root, "_42")
+        os.makedirs(ws_path, exist_ok=True)
+
+        orch._state.running["id42"] = RunningEntry(
+            issue_id="id42", identifier="#42", issue=_issue(id="id42", identifier="#42"),
+            state="open", started_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        )
+        orch._state.claimed.add("id42")
+
+        # Return state="in review" which is neither active nor terminal
+        async def mock_fetch(numbers):
+            return [_issue(id="id42", identifier="#42", state="in review")]
+        orch._tracker.fetch_issues_by_numbers = mock_fetch
+
+        await orch._reconcile_states(orch._effective_config())
+
+        # Worker terminated
+        assert "id42" not in orch._state.running
+        # Claim released
+        assert "id42" not in orch._state.claimed
+        # Workspace preserved (no cleanup for non-terminal)
+        assert os.path.isdir(ws_path)
+
+
+class TestReconciliationCancelledWorkerNoRetry:
+    """Reconciliation-cancelled workers should not schedule retry."""
+
+    def test_no_retry_when_already_terminated(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        wf_path = tmp_path / "WORKFLOW.md"
+        wf_path.write_text("---\ntracker:\n  kind: github\n  repo: o/r\n---\nP")
+        orch = Orchestrator(str(wf_path))
+        orch._load_and_apply_workflow()
+        orch._loop = asyncio.new_event_loop()
+
+        # Worker result arrives but entry was already removed by reconciliation
+        from symphony.models import WorkerResult
+        result = WorkerResult(
+            issue_id="id1", identifier="#1", success=False,
+            error="cancelled",
+        )
+        # No running entry exists (already popped by _terminate_running)
+        orch._handle_worker_exit(result)
+
+        # Should NOT schedule retry since entry was already handled
+        assert "id1" not in orch._state.retry_attempts
+
