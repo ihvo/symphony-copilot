@@ -11,6 +11,14 @@ polling:
   interval_ms: 30000
 workspace:
   root: /tmp/symphony_workspaces
+hooks:
+  after_create: |
+    git clone https://github.com/ihvo/symphony-copilot.git .
+    uv sync
+  before_run: |
+    git checkout main
+    git pull --ff-only
+    uv sync
 agent:
   max_concurrent_agents: 3
   max_turns: 20
