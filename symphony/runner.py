@@ -7,11 +7,11 @@ A factory (``_create_harness``) selects the active harness based on config.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from copilot import CopilotClient, SubprocessConfig
 from copilot.session import PermissionHandler
@@ -22,7 +22,6 @@ from symphony.errors import (
     CopilotNotFoundError,
     InvalidWorkspaceCwdError,
     PortExitError,
-    ResponseTimeoutError,
     TurnCancelledError,
     TurnFailedError,
     TurnInputRequiredError,
@@ -35,7 +34,7 @@ logger = logging.getLogger("symphony.runner")
 
 
 def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _make_session_id(thread_id: str, turn_id: str) -> str:
@@ -109,7 +108,11 @@ class CopilotHarness:
                 self._session.copilot_total_tokens = int(total)
                 self._emit(
                     "notification",
-                    usage={"input_tokens": int(inp), "output_tokens": int(out), "total_tokens": int(total)},
+                    usage={
+                        "input_tokens": int(inp),
+                        "output_tokens": int(out),
+                        "total_tokens": int(total),
+                    },
                 )
 
         elif event_type == "session.idle":
@@ -142,7 +145,8 @@ class CopilotHarness:
 
         logger.info(
             "agent_launch cwd=%s issue=%s",
-            self._workspace, self._issue.identifier,
+            self._workspace,
+            self._issue.identifier,
         )
 
         # Build SubprocessConfig
@@ -194,21 +198,25 @@ class CopilotHarness:
                 prompt,
                 timeout=turn_timeout,
             )
-        except asyncio.TimeoutError:
-            raise TurnTimeoutError()
+        except TimeoutError:
+            raise TurnTimeoutError() from None
         except Exception as exc:
             err_str = str(exc).lower()
             if "cancel" in err_str:
-                raise TurnCancelledError()
+                raise TurnCancelledError() from exc
             elif "input" in err_str and "required" in err_str:
-                raise TurnInputRequiredError()
-            raise TurnFailedError(str(exc))
+                raise TurnInputRequiredError() from exc
+            raise TurnFailedError(str(exc)) from exc
 
         # Check result event type if available
         if result:
             event_type = getattr(result.type, "value", "") if hasattr(result, "type") else ""
             if event_type == "session.error":
-                msg = str(getattr(result.data, "message", result.data)) if result.data else "turn failed"
+                msg = (
+                    str(getattr(result.data, "message", result.data))
+                    if result.data
+                    else "turn failed"
+                )
                 raise TurnFailedError(msg)
 
         self._emit("turn_completed", message=f"Turn {turn_number} completed")
@@ -294,7 +302,8 @@ async def run_agent_session(
                     if issue_state not in active_states:
                         logger.info(
                             "issue_no_longer_active issue=%s state=%s",
-                            issue.identifier, issue_state,
+                            issue.identifier,
+                            issue_state,
                         )
                         break
 

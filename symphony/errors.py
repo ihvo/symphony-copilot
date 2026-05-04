@@ -36,7 +36,9 @@ class WorkflowFrontMatterNotAMapError(SymphonyError):
     code = "workflow_front_matter_not_a_map"
 
     def __init__(self) -> None:
-        super().__init__("Workflow YAML front matter must be a mapping (dict), not a scalar or list")
+        super().__init__(
+            "Workflow YAML front matter must be a mapping (dict), not a scalar or list"
+        )
 
 
 class TemplateParseError(SymphonyError):

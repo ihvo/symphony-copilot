@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -99,7 +99,7 @@ class SymphonyServer:
                 {
                     "queued": True,
                     "coalesced": False,
-                    "requested_at": datetime.now(timezone.utc).isoformat(),
+                    "requested_at": datetime.now(UTC).isoformat(),
                     "operations": ["poll", "reconcile"],
                 },
                 status=202,
@@ -132,6 +132,7 @@ class SymphonyServer:
     async def start(self, port: int, host: str = "127.0.0.1") -> int:
         """Start the HTTP server. Returns the actual bound port."""
         import asyncio
+
         import uvicorn
 
         config = uvicorn.Config(

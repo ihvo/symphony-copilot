@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -47,8 +46,7 @@ class Issue:
             "url": self.url or "",
             "labels": list(self.labels),
             "blocked_by": [
-                {"id": b.id, "identifier": b.identifier, "state": b.state}
-                for b in self.blocked_by
+                {"id": b.id, "identifier": b.identifier, "state": b.state} for b in self.blocked_by
             ],
             "created_at": self.created_at.isoformat() if self.created_at else "",
             "updated_at": self.updated_at.isoformat() if self.updated_at else "",

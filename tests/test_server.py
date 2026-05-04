@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-from symphony.server import SymphonyServer, DASHBOARD_BUILD_DIR
+from symphony.server import SymphonyServer
 
 
 @pytest.fixture
@@ -74,9 +72,7 @@ async def test_dashboard_placeholder(mock_orchestrator, tmp_path):
     with patch("symphony.server.DASHBOARD_BUILD_DIR", fake_build):
         server = SymphonyServer(mock_orchestrator)
         transport = httpx.ASGITransport(app=server.app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as c:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
             resp = await c.get("/")
             assert resp.status_code == 200
             text = resp.text
@@ -94,7 +90,7 @@ async def test_dashboard_static_shell(mock_orchestrator, tmp_path):
     (build_dir / "_next").mkdir()
     index_html = build_dir / "index.html"
     index_html.write_text(
-        '<!DOCTYPE html><html><head><title>Symphony Dashboard</title>'
+        "<!DOCTYPE html><html><head><title>Symphony Dashboard</title>"
         '<link rel="icon" href="data:image/svg+xml,test"></head>'
         "<body>Next.js App</body></html>"
     )
@@ -102,9 +98,7 @@ async def test_dashboard_static_shell(mock_orchestrator, tmp_path):
     with patch("symphony.server.DASHBOARD_BUILD_DIR", build_dir):
         server = SymphonyServer(mock_orchestrator)
         transport = httpx.ASGITransport(app=server.app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as c:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
             resp = await c.get("/")
             assert resp.status_code == 200
             assert "Next.js App" in resp.text
@@ -168,9 +162,7 @@ async def test_route_priority_with_static_build(mock_orchestrator, tmp_path):
     with patch("symphony.server.DASHBOARD_BUILD_DIR", build_dir):
         server = SymphonyServer(mock_orchestrator)
         transport = httpx.ASGITransport(app=server.app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as c:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
             # API still returns JSON
             resp = await c.get("/api/v1/state")
             assert resp.status_code == 200

@@ -7,8 +7,6 @@ timeout handling, event extraction, and multi-turn behavior.
 
 from __future__ import annotations
 
-import asyncio
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,14 +14,14 @@ import pytest
 from symphony.config import ServiceConfig
 from symphony.errors import (
     InvalidWorkspaceCwdError,
-    PortExitError,
     TurnCancelledError,
     TurnFailedError,
     TurnInputRequiredError,
     TurnTimeoutError,
 )
 from symphony.models import AgentEvent, Issue, WorkflowDefinition
-from symphony.runner import CopilotAgentSession as CopilotSession, run_agent_session
+from symphony.runner import CopilotAgentSession as CopilotSession
+from symphony.runner import run_agent_session
 
 
 def _cfg(tmp_path, **overrides) -> ServiceConfig:
@@ -150,7 +148,7 @@ async def test_turn_timeout_enforced(tmp_path):
     ws = _ws(tmp_path)
     cfg = _cfg(tmp_path, turn_timeout_ms=100)
     ms = _mock_sdk_session()
-    ms.send_and_wait = AsyncMock(side_effect=asyncio.TimeoutError())
+    ms.send_and_wait = AsyncMock(side_effect=TimeoutError())
     mc = _mock_client(ms)
     with patch("symphony.runner.CopilotClient", return_value=mc):
         session = CopilotSession(cfg, ws, _issue())
@@ -261,8 +259,12 @@ async def test_run_agent_session_stops_on_non_active(tmp_path):
 
     with patch("symphony.runner.CopilotClient", return_value=mc):
         session = await run_agent_session(
-            config=cfg, workspace_path=ws, issue=_issue(),
-            prompt="go", attempt=None, max_turns=5,
+            config=cfg,
+            workspace_path=ws,
+            issue=_issue(),
+            prompt="go",
+            attempt=None,
+            max_turns=5,
             fetch_issue_state=closed_after_first,
         )
     assert session.turn_count == 1
@@ -285,8 +287,12 @@ async def test_state_refresh_failure_propagates(tmp_path):
     with patch("symphony.runner.CopilotClient", return_value=mc):
         with pytest.raises(RuntimeError, match="boom"):
             await run_agent_session(
-                config=cfg, workspace_path=ws, issue=_issue(),
-                prompt="go", attempt=None, max_turns=5,
+                config=cfg,
+                workspace_path=ws,
+                issue=_issue(),
+                prompt="go",
+                attempt=None,
+                max_turns=5,
                 fetch_issue_state=fail_refresh,
             )
 
@@ -304,7 +310,11 @@ async def test_max_turns_respected(tmp_path):
 
     with patch("symphony.runner.CopilotClient", return_value=mc):
         result = await run_agent_session(
-            config=cfg, workspace_path=ws, issue=_issue(),
-            prompt="go", attempt=None, max_turns=3,
+            config=cfg,
+            workspace_path=ws,
+            issue=_issue(),
+            prompt="go",
+            attempt=None,
+            max_turns=3,
         )
     assert result.turn_count == 3

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
 
 import pytest
 
-from symphony.models import BlockerRef, Issue, OrchestratorState, RetryEntry, RunningEntry, LiveSession
+from symphony.models import (
+    BlockerRef,
+    Issue,
+    RetryEntry,
+    RunningEntry,
+)
 from symphony.orchestrator import Orchestrator, _sort_key
 
 
@@ -27,7 +31,7 @@ def _issue(
         title=title,
         state=state,
         priority=priority,
-        created_at=created_at or datetime(2025, 1, 1, tzinfo=timezone.utc),
+        created_at=created_at or datetime(2025, 1, 1, tzinfo=UTC),
         blocked_by=blocked_by or [],
     )
 
@@ -41,14 +45,18 @@ class TestSortKey:
         assert [r.id for r in result] == ["a", "b", "c"]
 
     def test_created_at_tiebreaker(self):
-        i1 = _issue(id="a", priority=1, created_at=datetime(2025, 1, 2, tzinfo=timezone.utc))
-        i2 = _issue(id="b", priority=1, created_at=datetime(2025, 1, 1, tzinfo=timezone.utc))
+        i1 = _issue(id="a", priority=1, created_at=datetime(2025, 1, 2, tzinfo=UTC))
+        i2 = _issue(id="b", priority=1, created_at=datetime(2025, 1, 1, tzinfo=UTC))
         result = sorted([i1, i2], key=_sort_key)
         assert [r.id for r in result] == ["b", "a"]
 
     def test_identifier_tiebreaker(self):
-        i1 = _issue(id="a", identifier="#2", priority=1, created_at=datetime(2025, 1, 1, tzinfo=timezone.utc))
-        i2 = _issue(id="b", identifier="#1", priority=1, created_at=datetime(2025, 1, 1, tzinfo=timezone.utc))
+        i1 = _issue(
+            id="a", identifier="#2", priority=1, created_at=datetime(2025, 1, 1, tzinfo=UTC)
+        )
+        i2 = _issue(
+            id="b", identifier="#1", priority=1, created_at=datetime(2025, 1, 1, tzinfo=UTC)
+        )
         result = sorted([i1, i2], key=_sort_key)
         assert [r.id for r in result] == ["b", "a"]
 
@@ -150,7 +158,7 @@ class TestRetryBackoff:
     def test_cancel_existing_retry(self, tmp_path, monkeypatch):
         orch = self._make_orch_minimal(tmp_path, monkeypatch)
         orch._schedule_retry("id1", 1, "#1", "err1")
-        old_entry = orch._state.retry_attempts["id1"]
+        orch._state.retry_attempts["id1"]
         orch._schedule_retry("id1", 2, "#1", "err2")
         new_entry = orch._state.retry_attempts["id1"]
         assert new_entry.attempt == 2
@@ -216,7 +224,7 @@ class TestSnapshot:
             issue_id="id1",
             identifier="#1",
             issue=_issue(),
-            started_at=datetime(2025, 6, 1, tzinfo=timezone.utc),
+            started_at=datetime(2025, 6, 1, tzinfo=UTC),
             state="open",
         )
         snap = orch.get_snapshot()
@@ -232,8 +240,11 @@ class TestIssueDetail:
         orch = Orchestrator(str(wf_path))
         orch._load_and_apply_workflow()
         orch._state.running["id1"] = RunningEntry(
-            issue_id="id1", identifier="#1", issue=_issue(), state="open",
-            started_at=datetime(2025, 6, 1, tzinfo=timezone.utc),
+            issue_id="id1",
+            identifier="#1",
+            issue=_issue(),
+            state="open",
+            started_at=datetime(2025, 6, 1, tzinfo=UTC),
         )
         detail = orch.get_issue_detail("#1")
         assert detail is not None
@@ -264,10 +275,13 @@ class TestReconcileStalls:
         orch._loop = asyncio.get_event_loop()
 
         # Add a running entry that started 2 seconds ago with no events
-        old_time = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        old_time = datetime(2020, 1, 1, tzinfo=UTC)
         entry = RunningEntry(
-            issue_id="stale1", identifier="#10", issue=_issue(id="stale1", identifier="#10"),
-            state="open", started_at=old_time,
+            issue_id="stale1",
+            identifier="#10",
+            issue=_issue(id="stale1", identifier="#10"),
+            state="open",
+            started_at=old_time,
         )
         orch._state.running["stale1"] = entry
         orch._state.claimed.add("stale1")
@@ -285,16 +299,18 @@ class TestReconcileStalls:
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
         wf_path = tmp_path / "WORKFLOW.md"
         wf_path.write_text(
-            "---\ntracker:\n  kind: github\n  repo: o/r\n"
-            "copilot:\n  stall_timeout_ms: 0\n---\nP"
+            "---\ntracker:\n  kind: github\n  repo: o/r\ncopilot:\n  stall_timeout_ms: 0\n---\nP"
         )
         orch = Orchestrator(str(wf_path))
         orch._load_and_apply_workflow()
 
-        old_time = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        old_time = datetime(2020, 1, 1, tzinfo=UTC)
         orch._state.running["s1"] = RunningEntry(
-            issue_id="s1", identifier="#1", issue=_issue(id="s1"),
-            state="open", started_at=old_time,
+            issue_id="s1",
+            identifier="#1",
+            issue=_issue(id="s1"),
+            state="open",
+            started_at=old_time,
         )
         await orch._reconcile_stalls(orch._effective_config())
         # Should still be running (stall detection disabled)
@@ -315,14 +331,18 @@ class TestReconcileStates:
 
         # Add running entry
         orch._state.running["id42"] = RunningEntry(
-            issue_id="id42", identifier="#42", issue=_issue(id="id42", identifier="#42"),
-            state="open", started_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            issue_id="id42",
+            identifier="#42",
+            issue=_issue(id="id42", identifier="#42"),
+            state="open",
+            started_at=datetime(2025, 1, 1, tzinfo=UTC),
         )
         orch._state.claimed.add("id42")
 
         # Mock tracker to return closed state
         async def mock_fetch(numbers):
             return [_issue(id="id42", identifier="#42", state="closed")]
+
         orch._tracker.fetch_issues_by_numbers = mock_fetch
 
         await orch._reconcile_states(orch._effective_config())
@@ -337,12 +357,16 @@ class TestReconcileStates:
         orch._load_and_apply_workflow()
 
         orch._state.running["id1"] = RunningEntry(
-            issue_id="id1", identifier="#1", issue=_issue(id="id1", title="Old"),
-            state="open", started_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            issue_id="id1",
+            identifier="#1",
+            issue=_issue(id="id1", title="Old"),
+            state="open",
+            started_at=datetime(2025, 1, 1, tzinfo=UTC),
         )
 
         async def mock_fetch(numbers):
             return [_issue(id="id1", identifier="#1", title="Updated", state="open")]
+
         orch._tracker.fetch_issues_by_numbers = mock_fetch
 
         await orch._reconcile_states(orch._effective_config())
@@ -365,20 +389,26 @@ class TestWorkflowReload:
     def test_valid_reload_applies(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
         wf_path = tmp_path / "WORKFLOW.md"
-        wf_path.write_text("---\ntracker:\n  kind: github\n  repo: o/r\npolling:\n  interval_ms: 5000\n---\nP")
+        wf_path.write_text(
+            "---\ntracker:\n  kind: github\n  repo: o/r\npolling:\n  interval_ms: 5000\n---\nP"
+        )
         orch = Orchestrator(str(wf_path))
         orch._load_and_apply_workflow()
         assert orch._state.poll_interval_ms == 5000
 
         # Change workflow
-        wf_path.write_text("---\ntracker:\n  kind: github\n  repo: o/r\npolling:\n  interval_ms: 10000\n---\nP")
+        wf_path.write_text(
+            "---\ntracker:\n  kind: github\n  repo: o/r\npolling:\n  interval_ms: 10000\n---\nP"
+        )
         orch._check_workflow_reload()
         assert orch._state.poll_interval_ms == 10000
 
     def test_invalid_reload_keeps_last_good(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
         wf_path = tmp_path / "WORKFLOW.md"
-        wf_path.write_text("---\ntracker:\n  kind: github\n  repo: o/r\npolling:\n  interval_ms: 5000\n---\nP")
+        wf_path.write_text(
+            "---\ntracker:\n  kind: github\n  repo: o/r\npolling:\n  interval_ms: 5000\n---\nP"
+        )
         orch = Orchestrator(str(wf_path))
         orch._load_and_apply_workflow()
         assert orch._state.poll_interval_ms == 5000
@@ -418,18 +448,24 @@ class TestWorkerExitHandling:
 
         # Simulate running entry
         entry = RunningEntry(
-            issue_id="id1", identifier="#1", issue=_issue(),
-            state="open", started_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            issue_id="id1",
+            identifier="#1",
+            issue=_issue(),
+            state="open",
+            started_at=datetime(2025, 1, 1, tzinfo=UTC),
         )
         orch._state.running["id1"] = entry
         orch._state.claimed.add("id1")
 
         # Simulate normal worker exit
         from symphony.models import WorkerResult
+
         result = WorkerResult(
-            issue_id="id1", identifier="#1", success=True,
-            started_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
-            ended_at=datetime(2025, 1, 1, 0, 1, tzinfo=timezone.utc),
+            issue_id="id1",
+            identifier="#1",
+            success=True,
+            started_at=datetime(2025, 1, 1, tzinfo=UTC),
+            ended_at=datetime(2025, 1, 1, 0, 1, tzinfo=UTC),
         )
         orch._handle_worker_exit(result)
 
@@ -447,16 +483,22 @@ class TestWorkerExitHandling:
         orch._loop = asyncio.new_event_loop()
 
         entry = RunningEntry(
-            issue_id="id1", identifier="#1", issue=_issue(),
-            state="open", started_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            issue_id="id1",
+            identifier="#1",
+            issue=_issue(),
+            state="open",
+            started_at=datetime(2025, 1, 1, tzinfo=UTC),
             retry_attempt=2,
         )
         orch._state.running["id1"] = entry
         orch._state.claimed.add("id1")
 
         from symphony.models import WorkerResult
+
         result = WorkerResult(
-            issue_id="id1", identifier="#1", success=False,
+            issue_id="id1",
+            identifier="#1",
+            success=False,
             error="agent crashed",
         )
         orch._handle_worker_exit(result)
@@ -484,12 +526,15 @@ class TestOnRetry:
         orch = self._make_orch(tmp_path, monkeypatch)
         orch._state.claimed.add("id1")
         orch._state.retry_attempts["id1"] = RetryEntry(
-            issue_id="id1", identifier="#1", attempt=1,
+            issue_id="id1",
+            identifier="#1",
+            attempt=1,
         )
 
         # Mock tracker returns no matching issue
         async def mock_fetch():
             return [_issue(id="other", identifier="#99")]
+
         orch._tracker.fetch_candidate_issues = mock_fetch
 
         await orch._on_retry("id1")
@@ -504,7 +549,9 @@ class TestOnRetry:
         orch = self._make_orch(tmp_path, monkeypatch)
         orch._state.claimed.add("id1")
         orch._state.retry_attempts["id1"] = RetryEntry(
-            issue_id="id1", identifier="#1", attempt=2,
+            issue_id="id1",
+            identifier="#1",
+            attempt=2,
         )
         # Fill all slots
         for i in range(10):
@@ -514,6 +561,7 @@ class TestOnRetry:
 
         async def mock_fetch():
             return [_issue(id="id1")]
+
         orch._tracker.fetch_candidate_issues = mock_fetch
 
         await orch._on_retry("id1")
@@ -529,11 +577,14 @@ class TestOnRetry:
         orch = self._make_orch(tmp_path, monkeypatch)
         orch._state.claimed.add("id1")
         orch._state.retry_attempts["id1"] = RetryEntry(
-            issue_id="id1", identifier="#1", attempt=1,
+            issue_id="id1",
+            identifier="#1",
+            attempt=1,
         )
 
         async def mock_fail():
             raise RuntimeError("network error")
+
         orch._tracker.fetch_candidate_issues = mock_fail
 
         await orch._on_retry("id1")
@@ -557,7 +608,9 @@ class TestOnRetry:
 
         orch._state.claimed.add("id2")
         orch._state.retry_attempts["id2"] = RetryEntry(
-            issue_id="id2", identifier="#2", attempt=1,
+            issue_id="id2",
+            identifier="#2",
+            attempt=1,
         )
         # Fill the 1 open slot
         orch._state.running["id1"] = RunningEntry(
@@ -566,6 +619,7 @@ class TestOnRetry:
 
         async def mock_fetch():
             return [_issue(id="id2", identifier="#2", state="open")]
+
         orch._tracker.fetch_candidate_issues = mock_fetch
 
         await orch._on_retry("id2")
@@ -591,19 +645,24 @@ class TestReconcileNonActiveNonTerminal:
 
         # Create workspace so we can verify it's NOT cleaned
         import os
+
         ws_root = orch._effective_config().workspace_root
         ws_path = os.path.join(ws_root, "_42")
         os.makedirs(ws_path, exist_ok=True)
 
         orch._state.running["id42"] = RunningEntry(
-            issue_id="id42", identifier="#42", issue=_issue(id="id42", identifier="#42"),
-            state="open", started_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            issue_id="id42",
+            identifier="#42",
+            issue=_issue(id="id42", identifier="#42"),
+            state="open",
+            started_at=datetime(2025, 1, 1, tzinfo=UTC),
         )
         orch._state.claimed.add("id42")
 
         # Return state="in review" which is neither active nor terminal
         async def mock_fetch(numbers):
             return [_issue(id="id42", identifier="#42", state="in review")]
+
         orch._tracker.fetch_issues_by_numbers = mock_fetch
 
         await orch._reconcile_states(orch._effective_config())
@@ -629,8 +688,11 @@ class TestReconciliationCancelledWorkerNoRetry:
 
         # Worker result arrives but entry was already removed by reconciliation
         from symphony.models import WorkerResult
+
         result = WorkerResult(
-            issue_id="id1", identifier="#1", success=False,
+            issue_id="id1",
+            identifier="#1",
+            success=False,
             error="cancelled",
         )
         # No running entry exists (already popped by _terminate_running)
@@ -638,4 +700,3 @@ class TestReconciliationCancelledWorkerNoRetry:
 
         # Should NOT schedule retry since entry was already handled
         assert "id1" not in orch._state.retry_attempts
-

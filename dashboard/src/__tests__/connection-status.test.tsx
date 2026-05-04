@@ -25,9 +25,7 @@ describe("ConnectionStatus", () => {
     });
     mockUseRelativeTime.mockReturnValue("");
     render(<ConnectionStatus />);
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Connection lost"
-    );
+    expect(screen.getByRole("status")).toHaveTextContent("Connection lost");
   });
 
   it("shows relative time when connected", () => {

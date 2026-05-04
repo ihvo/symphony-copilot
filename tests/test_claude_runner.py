@@ -22,7 +22,6 @@ from symphony.errors import (
 )
 from symphony.models import AgentEvent, Issue, WorkflowDefinition
 
-
 # ---------------------------------------------------------------------------
 # Mock SDK message types (match real class names for isinstance-by-name checks)
 # ---------------------------------------------------------------------------
@@ -238,7 +237,7 @@ class TestClaudeHarnessTurns:
 
         client = _mock_claude_client()
         # connect() will timeout
-        client.connect = AsyncMock(side_effect=asyncio.TimeoutError())
+        client.connect = AsyncMock(side_effect=TimeoutError())
         mock_module = _mock_sdk_module(client)
 
         with patch.dict("sys.modules", {"claude_agent_sdk": mock_module}):
@@ -497,7 +496,7 @@ class TestClaudeHarnessEvents:
 class TestHarnessFactory:
     @pytest.mark.asyncio
     async def test_factory_copilot(self, tmp_path):
-        from symphony.runner import _create_harness, CopilotHarness
+        from symphony.runner import CopilotHarness, _create_harness
 
         cfg = ServiceConfig(
             WorkflowDefinition(
@@ -515,8 +514,8 @@ class TestHarnessFactory:
 
     @pytest.mark.asyncio
     async def test_factory_claude(self, tmp_path):
-        from symphony.runner import _create_harness
         from symphony.claude_runner import ClaudeHarness
+        from symphony.runner import _create_harness
 
         cfg = ServiceConfig(
             WorkflowDefinition(
@@ -553,7 +552,7 @@ class TestHarnessFactory:
 
     @pytest.mark.asyncio
     async def test_factory_default_is_copilot(self, tmp_path):
-        from symphony.runner import _create_harness, CopilotHarness
+        from symphony.runner import CopilotHarness, _create_harness
 
         cfg = ServiceConfig(
             WorkflowDefinition(

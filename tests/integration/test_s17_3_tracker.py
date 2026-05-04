@@ -16,7 +16,6 @@ from symphony.errors import (
 )
 from symphony.tracker import GitHubTrackerClient
 
-
 # ---------------------------------------------------------------------------
 # §17.3 — Candidate issue fetch uses active states and repository
 # ---------------------------------------------------------------------------
@@ -29,8 +28,11 @@ async def test_candidate_fetch_uses_active_states_and_repo(fake_github):
     fake_github.add_issue(2, state="closed")
 
     client = GitHubTrackerClient(
-        fake_github.base_url, "tok", "test/repo",
-        active_states=["open"], terminal_states=["closed"],
+        fake_github.base_url,
+        "tok",
+        "test/repo",
+        active_states=["open"],
+        terminal_states=["closed"],
     )
     try:
         issues = await client.fetch_candidate_issues()
@@ -53,7 +55,9 @@ async def test_github_query_uses_repo_filter(fake_github):
     fake_github.add_issue(10, state="open")
 
     client = GitHubTrackerClient(
-        fake_github.base_url, "tok", "myorg/myrepo",
+        fake_github.base_url,
+        "tok",
+        "myorg/myrepo",
     )
     try:
         await client.fetch_candidate_issues()
@@ -166,7 +170,8 @@ async def test_fetch_issue_states_by_ids_delegates_to_numbers(fake_github):
     client = GitHubTrackerClient(fake_github.base_url, "tok", "test/repo")
     try:
         issues = await client.fetch_issue_states_by_ids(
-            ["NODE_7"], id_to_number={"NODE_7": 7},
+            ["NODE_7"],
+            id_to_number={"NODE_7": 7},
         )
     finally:
         await client.close()
@@ -211,7 +216,9 @@ async def test_error_malformed_json(fake_github):
 async def test_error_connection_refused():
     """Connection refused → GitHubApiRequestError."""
     client = GitHubTrackerClient(
-        "http://127.0.0.1:1", "tok", "test/repo",  # nothing on port 1
+        "http://127.0.0.1:1",
+        "tok",
+        "test/repo",  # nothing on port 1
     )
     try:
         with pytest.raises(GitHubApiRequestError):
@@ -280,8 +287,11 @@ async def test_update_config_changes_repo(fake_github):
     client = GitHubTrackerClient(fake_github.base_url, "tok", "test/repo")
     try:
         client.update_config(
-            fake_github.base_url, "tok", "other/repo",
-            active_states=["open"], terminal_states=["closed"],
+            fake_github.base_url,
+            "tok",
+            "other/repo",
+            active_states=["open"],
+            terminal_states=["closed"],
         )
         await client.fetch_candidate_issues()
     finally:

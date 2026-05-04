@@ -7,8 +7,6 @@ at the boundary rather than shell scripts.
 
 from __future__ import annotations
 
-import asyncio
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,12 +14,11 @@ import pytest
 from symphony.config import ServiceConfig
 from symphony.errors import (
     InvalidWorkspaceCwdError,
-    PortExitError,
     TurnFailedError,
-    TurnTimeoutError,
 )
 from symphony.models import AgentEvent, Issue, WorkflowDefinition
-from symphony.runner import CopilotAgentSession as CopilotSession, run_agent_session
+from symphony.runner import CopilotAgentSession as CopilotSession
+from symphony.runner import run_agent_session
 
 
 def _cfg(tmp_path) -> ServiceConfig:
@@ -169,8 +166,12 @@ class TestRunAgentSession:
 
         with patch("symphony.runner.CopilotClient", return_value=mock_client):
             result = await run_agent_session(
-                config=cfg, workspace_path=ws, issue=_issue(),
-                prompt="go", attempt=None, max_turns=5,
+                config=cfg,
+                workspace_path=ws,
+                issue=_issue(),
+                prompt="go",
+                attempt=None,
+                max_turns=5,
                 fetch_issue_state=closed_refresh,
             )
         assert result.turn_count == 1
@@ -189,8 +190,12 @@ class TestRunAgentSession:
         with patch("symphony.runner.CopilotClient", return_value=mock_client):
             with pytest.raises(RuntimeError, match="network error"):
                 await run_agent_session(
-                    config=cfg, workspace_path=ws, issue=_issue(),
-                    prompt="go", attempt=None, max_turns=5,
+                    config=cfg,
+                    workspace_path=ws,
+                    issue=_issue(),
+                    prompt="go",
+                    attempt=None,
+                    max_turns=5,
                     fetch_issue_state=fail_refresh,
                 )
 
@@ -204,9 +209,12 @@ class TestRunAgentSession:
 
         with patch("symphony.runner.CopilotClient", return_value=mock_client):
             result = await run_agent_session(
-                config=cfg, workspace_path=ws, issue=_issue(),
-                prompt="go", attempt=None, max_turns=3,
+                config=cfg,
+                workspace_path=ws,
+                issue=_issue(),
+                prompt="go",
+                attempt=None,
+                max_turns=3,
             )
         assert result.turn_count == 3
         assert mock_session.send_and_wait.call_count == 3
-

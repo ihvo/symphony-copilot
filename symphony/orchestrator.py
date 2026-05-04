@@ -11,16 +11,16 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, timezone
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
+from symphony import workspace as ws_mod
 from symphony.config import ServiceConfig
 from symphony.errors import SymphonyError
 from symphony.models import (
     AgentEvent,
-    CopilotTotals,
     Issue,
-    LiveSession,
     OrchestratorState,
     RateLimitInfo,
     RetryEntry,
@@ -30,8 +30,7 @@ from symphony.models import (
 from symphony.prompt import render_prompt
 from symphony.runner import run_agent_session
 from symphony.tracker import GitHubTrackerClient
-from symphony.workflow import WorkflowDefinition, get_workflow_mtime, load_workflow
-from symphony import workspace as ws_mod
+from symphony.workflow import get_workflow_mtime, load_workflow
 
 logger = logging.getLogger("symphony.orchestrator")
 
@@ -39,7 +38,7 @@ _CONTINUATION_DELAY_MS = 1000
 
 
 def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _issue_number(identifier: str) -> int | None:
@@ -51,7 +50,7 @@ def _issue_number(identifier: str) -> int | None:
 def _sort_key(issue: Issue) -> tuple:
     """Dispatch sort key: priority asc (null last), created_at asc, identifier."""
     p = issue.priority if issue.priority is not None else 999999
-    c = issue.created_at or datetime.max.replace(tzinfo=timezone.utc)
+    c = issue.created_at or datetime.max.replace(tzinfo=UTC)
     return (p, c, issue.identifier)
 
 
@@ -297,10 +296,7 @@ class Orchestrator:
         if state_lower not in by_state:
             return self._available_slots()
         limit = by_state[state_lower]
-        current = sum(
-            1 for e in self._state.running.values()
-            if e.state.lower() == state_lower
-        )
+        current = sum(1 for e in self._state.running.values() if e.state.lower() == state_lower)
         return max(limit - current, 0)
 
     def _should_dispatch(self, issue: Issue) -> bool:
@@ -352,7 +348,9 @@ class Orchestrator:
 
         logger.info(
             "dispatch issue_id=%s issue_identifier=%s attempt=%s",
-            issue.id, issue.identifier, attempt,
+            issue.id,
+            issue.identifier,
+            attempt,
         )
 
         # Claim
@@ -397,7 +395,9 @@ class Orchestrator:
 
             # 2. Run before_run hook
             if cfg.hook_before_run:
-                await ws_mod.run_hook("before_run", cfg.hook_before_run, workspace.path, cfg.hook_timeout_ms)
+                await ws_mod.run_hook(
+                    "before_run", cfg.hook_before_run, workspace.path, cfg.hook_timeout_ms
+                )
 
             # 3. Build prompt
             issue_dict = issue.to_template_dict()
@@ -432,33 +432,45 @@ class Orchestrator:
             # Run after_run hook (best-effort)
             if cfg.hook_after_run:
                 try:
-                    await ws_mod.run_hook("after_run", cfg.hook_after_run, workspace.path, cfg.hook_timeout_ms)
+                    await ws_mod.run_hook(
+                        "after_run", cfg.hook_after_run, workspace.path, cfg.hook_timeout_ms
+                    )
                 except Exception as exc:
-                    logger.warning("after_run_hook_failed issue=%s error=%s", issue.identifier, exc)
+                    logger.warning(
+                        "after_run_hook_failed issue=%s error=%s", issue.identifier, exc
+                    )
 
         except asyncio.CancelledError:
             result.error = "cancelled"
-            logger.info("worker_cancelled issue_id=%s issue_identifier=%s", issue.id, issue.identifier)
+            logger.info(
+                "worker_cancelled issue_id=%s issue_identifier=%s", issue.id, issue.identifier
+            )
             # Best-effort after_run on cancellation
             if cfg.hook_after_run:
                 ws_path = ws_mod.workspace_path_for(cfg.workspace_root, issue.identifier)
                 if os.path.isdir(ws_path):
                     try:
-                        await ws_mod.run_hook("after_run", cfg.hook_after_run, ws_path, cfg.hook_timeout_ms)
+                        await ws_mod.run_hook(
+                            "after_run", cfg.hook_after_run, ws_path, cfg.hook_timeout_ms
+                        )
                     except Exception:
                         pass
         except Exception as exc:
             result.error = str(exc)
             logger.error(
                 "worker_failed issue_id=%s issue_identifier=%s error=%s",
-                issue.id, issue.identifier, exc,
+                issue.id,
+                issue.identifier,
+                exc,
             )
             # Run after_run hook (best-effort) if workspace exists
             if cfg.hook_after_run:
                 ws_path = ws_mod.workspace_path_for(cfg.workspace_root, issue.identifier)
                 if os.path.isdir(ws_path):
                     try:
-                        await ws_mod.run_hook("after_run", cfg.hook_after_run, ws_path, cfg.hook_timeout_ms)
+                        await ws_mod.run_hook(
+                            "after_run", cfg.hook_after_run, ws_path, cfg.hook_timeout_ms
+                        )
                     except Exception:
                         pass
 
@@ -472,7 +484,7 @@ class Orchestrator:
         while self._running:
             try:
                 event = await asyncio.wait_for(self._event_queue.get(), timeout=1.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             except asyncio.CancelledError:
                 break
@@ -518,7 +530,8 @@ class Orchestrator:
             )
             logger.info(
                 "worker_succeeded issue_id=%s issue_identifier=%s",
-                result.issue_id, result.identifier,
+                result.issue_id,
+                result.identifier,
             )
         else:
             next_attempt = (entry.retry_attempt or 0) + 1 if entry else 1
@@ -530,7 +543,10 @@ class Orchestrator:
             )
             logger.info(
                 "worker_failed_retrying issue_id=%s issue_identifier=%s attempt=%d error=%s",
-                result.issue_id, result.identifier, next_attempt, result.error,
+                result.issue_id,
+                result.identifier,
+                next_attempt,
+                result.error,
             )
 
         self._notify_observers()
@@ -698,7 +714,9 @@ class Orchestrator:
                 try:
                     await ws_mod.cleanup_workspace(cfg, entry.identifier)
                 except Exception as exc:
-                    logger.warning("workspace_cleanup_failed issue=%s error=%s", entry.identifier, exc)
+                    logger.warning(
+                        "workspace_cleanup_failed issue=%s error=%s", entry.identifier, exc
+                    )
 
     # --- Retry ---
 
@@ -761,7 +779,9 @@ class Orchestrator:
         errors = cfg.validate_dispatch()
         if errors:
             self._schedule_retry(
-                issue_id, retry.attempt + 1, retry.identifier,
+                issue_id,
+                retry.attempt + 1,
+                retry.identifier,
                 error="config validation failed",
             )
             return
@@ -769,9 +789,11 @@ class Orchestrator:
         # Fetch candidates
         try:
             candidates = await self._tracker.fetch_candidate_issues()
-        except Exception as exc:
+        except Exception:
             self._schedule_retry(
-                issue_id, retry.attempt + 1, retry.identifier,
+                issue_id,
+                retry.attempt + 1,
+                retry.identifier,
                 error="retry poll failed",
             )
             return
@@ -792,7 +814,9 @@ class Orchestrator:
         # Check global slots
         if self._available_slots() <= 0:
             self._schedule_retry(
-                issue_id, retry.attempt + 1, found.identifier,
+                issue_id,
+                retry.attempt + 1,
+                found.identifier,
                 error="no available orchestrator slots",
             )
             return
@@ -800,7 +824,9 @@ class Orchestrator:
         # Check per-state slots
         if self._per_state_slots(found.state) <= 0:
             self._schedule_retry(
-                issue_id, retry.attempt + 1, found.identifier,
+                issue_id,
+                retry.attempt + 1,
+                found.identifier,
                 error="no available per-state slots",
             )
             return
@@ -827,38 +853,43 @@ class Orchestrator:
         now = _now_utc()
         running_rows = []
         for entry in self._state.running.values():
-            running_rows.append({
-                "issue_id": entry.issue_id,
-                "issue_identifier": entry.identifier,
-                "state": entry.state,
-                "session_id": entry.session.session_id,
-                "turn_count": entry.session.turn_count,
-                "last_event": entry.session.last_copilot_event,
-                "last_message": entry.session.last_copilot_message,
-                "started_at": entry.started_at.isoformat() if entry.started_at else None,
-                "last_event_at": (
-                    entry.session.last_copilot_timestamp.isoformat()
-                    if entry.session.last_copilot_timestamp else None
-                ),
-                "tokens": {
-                    "input_tokens": entry.session.copilot_input_tokens,
-                    "output_tokens": entry.session.copilot_output_tokens,
-                    "total_tokens": entry.session.copilot_total_tokens,
-                },
-            })
+            running_rows.append(
+                {
+                    "issue_id": entry.issue_id,
+                    "issue_identifier": entry.identifier,
+                    "state": entry.state,
+                    "session_id": entry.session.session_id,
+                    "turn_count": entry.session.turn_count,
+                    "last_event": entry.session.last_copilot_event,
+                    "last_message": entry.session.last_copilot_message,
+                    "started_at": entry.started_at.isoformat() if entry.started_at else None,
+                    "last_event_at": (
+                        entry.session.last_copilot_timestamp.isoformat()
+                        if entry.session.last_copilot_timestamp
+                        else None
+                    ),
+                    "tokens": {
+                        "input_tokens": entry.session.copilot_input_tokens,
+                        "output_tokens": entry.session.copilot_output_tokens,
+                        "total_tokens": entry.session.copilot_total_tokens,
+                    },
+                }
+            )
 
         retry_rows = []
         for retry in self._state.retry_attempts.values():
             due_at = datetime.fromtimestamp(
-                time.time() + (retry.due_at_ms - time.monotonic()), tz=timezone.utc
+                time.time() + (retry.due_at_ms - time.monotonic()), tz=UTC
             )
-            retry_rows.append({
-                "issue_id": retry.issue_id,
-                "issue_identifier": retry.identifier,
-                "attempt": retry.attempt,
-                "due_at": due_at.isoformat(),
-                "error": retry.error,
-            })
+            retry_rows.append(
+                {
+                    "issue_id": retry.issue_id,
+                    "issue_identifier": retry.identifier,
+                    "attempt": retry.attempt,
+                    "due_at": due_at.isoformat(),
+                    "error": retry.error,
+                }
+            )
 
         # Compute live seconds_running
         active_seconds = sum(
@@ -883,8 +914,7 @@ class Orchestrator:
                 "seconds_running": round(total_seconds, 1),
             },
             "rate_limits": (
-                self._state.copilot_rate_limits.data
-                if self._state.copilot_rate_limits else None
+                self._state.copilot_rate_limits.data if self._state.copilot_rate_limits else None
             ),
         }
 
@@ -899,7 +929,9 @@ class Orchestrator:
                     "status": "running",
                     "workspace": {
                         "path": ws_mod.workspace_path_for(
-                            self._effective_config().workspace_root if self._effective_config() else "",
+                            self._effective_config().workspace_root
+                            if self._effective_config()
+                            else "",
                             entry.identifier,
                         ),
                     },
@@ -912,7 +944,8 @@ class Orchestrator:
                         "last_message": entry.session.last_copilot_message,
                         "last_event_at": (
                             entry.session.last_copilot_timestamp.isoformat()
-                            if entry.session.last_copilot_timestamp else None
+                            if entry.session.last_copilot_timestamp
+                            else None
                         ),
                         "tokens": {
                             "input_tokens": entry.session.copilot_input_tokens,
@@ -928,7 +961,7 @@ class Orchestrator:
         for retry in self._state.retry_attempts.values():
             if retry.identifier == identifier:
                 due_at = datetime.fromtimestamp(
-                    time.time() + (retry.due_at_ms - time.monotonic()), tz=timezone.utc
+                    time.time() + (retry.due_at_ms - time.monotonic()), tz=UTC
                 )
                 return {
                     "issue_identifier": retry.identifier,
@@ -936,7 +969,9 @@ class Orchestrator:
                     "status": "retrying",
                     "workspace": {
                         "path": ws_mod.workspace_path_for(
-                            self._effective_config().workspace_root if self._effective_config() else "",
+                            self._effective_config().workspace_root
+                            if self._effective_config()
+                            else "",
                             retry.identifier,
                         ),
                     },

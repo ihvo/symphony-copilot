@@ -85,43 +85,53 @@ def main() -> None:
 
         # Optional token-usage notification
         if token_usage:
-            _write({
-                "jsonrpc": "2.0",
-                "method": "thread/tokenUsage/updated",
-                "params": {"usage": {
-                    "inputTokens": token_usage.get("input", 100),
-                    "outputTokens": token_usage.get("output", 50),
-                    "totalTokens": token_usage.get("total", 150),
-                }},
-            })
+            _write(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "thread/tokenUsage/updated",
+                    "params": {
+                        "usage": {
+                            "inputTokens": token_usage.get("input", 100),
+                            "outputTokens": token_usage.get("output", 50),
+                            "totalTokens": token_usage.get("total", 150),
+                        }
+                    },
+                }
+            )
 
         # Optional rate-limit notification
         if rate_limit_turn is not None and i == rate_limit_turn:
-            _write({
-                "jsonrpc": "2.0",
-                "method": "rateLimits/updated",
-                "params": {"remaining": 42, "limit": 100, "reset": "2099-01-01T00:00:00Z"},
-            })
+            _write(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "rateLimits/updated",
+                    "params": {"remaining": 42, "limit": 100, "reset": "2099-01-01T00:00:00Z"},
+                }
+            )
 
         # Optional approval request (waits for client response)
         if approval_turn is not None and i == approval_turn:
-            _write({
-                "jsonrpc": "2.0",
-                "id": next_server_id,
-                "method": "approval/requested",
-                "params": {"type": "command", "command": "echo test"},
-            })
+            _write(
+                {
+                    "jsonrpc": "2.0",
+                    "id": next_server_id,
+                    "method": "approval/requested",
+                    "params": {"type": "command", "command": "echo test"},
+                }
+            )
             next_server_id += 1
             _read()  # consume approval response
 
         # Optional unsupported tool call (waits for client response)
         if tool_call_turn is not None and i == tool_call_turn:
-            _write({
-                "jsonrpc": "2.0",
-                "id": next_server_id,
-                "method": "tool/called",
-                "params": {"name": tool_name},
-            })
+            _write(
+                {
+                    "jsonrpc": "2.0",
+                    "id": next_server_id,
+                    "method": "tool/called",
+                    "params": {"name": tool_name},
+                }
+            )
             next_server_id += 1
             _read()  # consume tool response
 
@@ -129,7 +139,13 @@ def main() -> None:
         if tb == "success":
             _write({"jsonrpc": "2.0", "method": "turn/completed", "params": {}})
         elif tb == "fail":
-            _write({"jsonrpc": "2.0", "method": "turn/failed", "params": {"error": "mock turn failure"}})
+            _write(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "turn/failed",
+                    "params": {"error": "mock turn failure"},
+                }
+            )
             break
         elif tb == "cancel":
             _write({"jsonrpc": "2.0", "method": "turn/cancelled", "params": {}})
