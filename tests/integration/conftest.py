@@ -2,12 +2,12 @@
 
 Provides:
 
-*  ``FakeGitHub`` — an in-process aiohttp server that mimics the subset
-   of the GitHub REST Issues API that Symphony uses.
+*  ``FakeGitHub`` — a mock GitHub REST API backed by ``respx`` that
+   intercepts ``httpx`` requests to a configurable base URL.
 *  ``agent_command()`` — builds a ``copilot.command`` string that runs
    ``mock_agent.py`` with a given config dict.
-*  Pytest fixtures that start/stop the fake server and create workflow
-   files wired to it.
+*  Pytest fixtures that activate the mock and create workflow files
+   wired to it.
 """
 
 from __future__ import annotations
@@ -15,13 +15,15 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shlex
 import sys
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
-from aiohttp import web
+import respx
 
 
 # ---------------------------------------------------------------------------
@@ -41,25 +43,18 @@ def agent_command(config: dict[str, Any] | None = None) -> str:
 # FakeGitHub
 # ---------------------------------------------------------------------------
 
-class FakeGitHub:
-    """Minimal fake GitHub Issues REST API."""
+_LIST_PATTERN = re.compile(r"/repos/(?P<owner>[^/]+)/(?P<repo>[^/]+)/issues$")
+_GET_PATTERN = re.compile(r"/repos/(?P<owner>[^/]+)/(?P<repo>[^/]+)/issues/(?P<number>\d+)$")
 
-    def __init__(self) -> None:
+
+class FakeGitHub:
+    """Minimal fake GitHub Issues REST API backed by respx."""
+
+    def __init__(self, base_url: str = "https://fake-github.test") -> None:
         self.issues: dict[int, dict[str, Any]] = {}
         self.request_log: list[tuple[str, str, dict[str, str]]] = []
         self.errors: dict[str, tuple[int, str]] = {}
-        self._app = web.Application()
-        self._app.router.add_get(
-            "/repos/{owner}/{repo}/issues", self._handle_list,
-        )
-        self._app.router.add_get(
-            "/repos/{owner}/{repo}/issues/{number:\\d+}", self._handle_get,
-        )
-        self.base_url: str = ""
-
-    @property
-    def app(self) -> web.Application:
-        return self._app
+        self.base_url: str = base_url
 
     # -- helpers for test setup --
 
@@ -108,38 +103,44 @@ class FakeGitHub:
     def clear_errors(self) -> None:
         self.errors.clear()
 
-    # -- handlers --
+    # -- respx side-effect handlers --
 
-    async def _handle_list(self, request: web.Request) -> web.Response:
-        self.request_log.append(("GET", request.path, dict(request.query)))
+    def _handle_list(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        params = dict(request.url.params)
+        self.request_log.append(("GET", path, params))
 
         for key, (status, body) in self.errors.items():
-            if key == "list" or key in request.path:
-                return web.Response(text=body, status=status)
+            if key == "list" or key in path:
+                return httpx.Response(status, text=body)
 
-        state_filter = request.query.get("state", "open").lower()
-        per_page = int(request.query.get("per_page", "50"))
-        page = int(request.query.get("page", "1"))
+        state_filter = params.get("state", "open").lower()
+        per_page = int(params.get("per_page", "50"))
+        page = int(params.get("page", "1"))
 
         matching = sorted(
             (i for i in self.issues.values() if i["state"].lower() == state_filter),
             key=lambda x: x["number"],
         )
         start = (page - 1) * per_page
-        return web.json_response(matching[start : start + per_page])
+        page_data = matching[start : start + per_page]
+        return httpx.Response(200, json=page_data)
 
-    async def _handle_get(self, request: web.Request) -> web.Response:
-        number = int(request.match_info["number"])
-        self.request_log.append(("GET", request.path, {}))
+    def _handle_get(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        self.request_log.append(("GET", path, {}))
+
+        m = _GET_PATTERN.search(path)
+        number = int(m.group("number")) if m else 0
 
         for key, (status, body) in self.errors.items():
-            if key == f"issue:{number}" or key in request.path:
-                return web.Response(text=body, status=status)
+            if key == f"issue:{number}" or key in path:
+                return httpx.Response(status, text=body)
 
         issue = self.issues.get(number)
         if issue is None:
-            return web.json_response({"message": "Not Found"}, status=404)
-        return web.json_response(issue)
+            return httpx.Response(404, json={"message": "Not Found"})
+        return httpx.Response(200, json=issue)
 
 
 # ---------------------------------------------------------------------------
@@ -147,22 +148,27 @@ class FakeGitHub:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-async def fake_github():
-    """Start a ``FakeGitHub`` server on an ephemeral port.
+def fake_github():
+    """Activate a ``FakeGitHub`` mock that intercepts httpx requests.
 
     Yields the ``FakeGitHub`` instance whose ``.base_url`` is already set.
+    Uses ``assert_all_called=False`` so unmatched routes don't raise,
+    and passthrough is enabled for non-FakeGitHub URLs (e.g. HTTP server
+    integration tests hitting localhost).
     """
     gh = FakeGitHub()
-    runner = web.AppRunner(gh.app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    port = site._server.sockets[0].getsockname()[1]
-    gh.base_url = f"http://127.0.0.1:{port}"
-    try:
+    with respx.mock(assert_all_called=False) as router:
+        router.route(
+            method="GET",
+            url__regex=rf"^{re.escape(gh.base_url)}/repos/.+/issues/\d+",
+        ).mock(side_effect=gh._handle_get)
+        router.route(
+            method="GET",
+            url__regex=rf"^{re.escape(gh.base_url)}/repos/.+/issues",
+        ).mock(side_effect=gh._handle_list)
+        # Allow real HTTP requests to pass through (e.g. localhost server)
+        router.route().pass_through()
         yield gh
-    finally:
-        await runner.cleanup()
 
 
 @pytest.fixture
