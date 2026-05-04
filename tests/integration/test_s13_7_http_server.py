@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
-import aiohttp
+import httpx
 import pytest
 
 from symphony.orchestrator import Orchestrator
@@ -27,14 +27,14 @@ async def test_get_state_endpoint(fake_github, make_workflow, tmp_path):
     port = await server.start(0)
 
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"http://127.0.0.1:{port}/api/v1/state") as r:
-                assert r.status == 200
-                data = await r.json()
-                assert "counts" in data
-                assert "copilot_totals" in data
-                assert "running" in data
-                assert "retrying" in data
+        async with httpx.AsyncClient() as c:
+            r = await c.get(f"http://127.0.0.1:{port}/api/v1/state")
+            assert r.status_code == 200
+            data = r.json()
+            assert "counts" in data
+            assert "copilot_totals" in data
+            assert "running" in data
+            assert "retrying" in data
     finally:
         await server.stop()
         await orch.stop()
@@ -50,11 +50,10 @@ async def test_dashboard_html(fake_github, make_workflow, tmp_path):
     port = await server.start(0)
 
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"http://127.0.0.1:{port}/") as r:
-                assert r.status == 200
-                html = await r.text()
-                assert "Symphony Dashboard" in html
+        async with httpx.AsyncClient() as c:
+            r = await c.get(f"http://127.0.0.1:{port}/")
+            assert r.status_code == 200
+            assert "Symphony Dashboard" in r.text
     finally:
         await server.stop()
         await orch.stop()
@@ -70,11 +69,11 @@ async def test_issue_detail_not_found(fake_github, make_workflow, tmp_path):
     port = await server.start(0)
 
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"http://127.0.0.1:{port}/api/v1/999") as r:
-                assert r.status == 404
-                data = await r.json()
-                assert data["error"]["code"] == "issue_not_found"
+        async with httpx.AsyncClient() as c:
+            r = await c.get(f"http://127.0.0.1:{port}/api/v1/999")
+            assert r.status_code == 404
+            data = r.json()
+            assert data["error"]["code"] == "issue_not_found"
     finally:
         await server.stop()
         await orch.stop()
@@ -98,12 +97,12 @@ async def test_issue_detail_found(fake_github, make_workflow, tmp_path, mock_age
         ok = await wait_until(lambda: len(orch.state.running) > 0, timeout=5.0)
         assert ok
 
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"http://127.0.0.1:{port}/api/v1/5") as r:
-                assert r.status == 200
-                data = await r.json()
-                assert data["issue_identifier"] == "#5"
-                assert data["status"] == "running"
+        async with httpx.AsyncClient() as c:
+            r = await c.get(f"http://127.0.0.1:{port}/api/v1/5")
+            assert r.status_code == 200
+            data = r.json()
+            assert data["issue_identifier"] == "#5"
+            assert data["status"] == "running"
     finally:
         await server.stop()
         await orch.stop()
@@ -119,12 +118,12 @@ async def test_refresh_endpoint(fake_github, make_workflow, tmp_path):
     port = await server.start(0)
 
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(f"http://127.0.0.1:{port}/api/v1/refresh") as r:
-                assert r.status == 202
-                data = await r.json()
-                assert data["queued"] is True
-                assert "poll" in data["operations"]
+        async with httpx.AsyncClient() as c:
+            r = await c.post(f"http://127.0.0.1:{port}/api/v1/refresh")
+            assert r.status_code == 202
+            data = r.json()
+            assert data["queued"] is True
+            assert "poll" in data["operations"]
     finally:
         await server.stop()
         await orch.stop()
@@ -140,9 +139,9 @@ async def test_method_not_allowed(fake_github, make_workflow, tmp_path):
     port = await server.start(0)
 
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.delete(f"http://127.0.0.1:{port}/api/v1/state") as r:
-                assert r.status == 405
+        async with httpx.AsyncClient() as c:
+            r = await c.delete(f"http://127.0.0.1:{port}/api/v1/state")
+            assert r.status_code == 405
     finally:
         await server.stop()
         await orch.stop()
@@ -165,10 +164,9 @@ async def test_dashboard_xss_escaping(fake_github, make_workflow, tmp_path, mock
     try:
         ok = await wait_until(lambda: len(orch.state.running) > 0, timeout=5.0)
         # Even if no issue is running yet, the dashboard should render
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"http://127.0.0.1:{port}/") as r:
-                html = await r.text()
-                assert "<script>" not in html
+        async with httpx.AsyncClient() as c:
+            r = await c.get(f"http://127.0.0.1:{port}/")
+            assert "<script>" not in r.text
     finally:
         await server.stop()
         await orch.stop()

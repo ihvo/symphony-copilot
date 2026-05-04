@@ -18,10 +18,10 @@ orchestrator.py  → single-authority poll loop, all mutable state lives here
 config.py        → typed getters over WORKFLOW.md front matter (defaults, $VAR, ~)
 workflow.py      → parses WORKFLOW.md → {config map, prompt body}
 prompt.py        → Jinja2 strict-mode rendering
-tracker.py       → GitHub Issues REST client (paginate, normalize, refresh)
+tracker.py       → GitHub Issues REST client via httpx (paginate, normalize, refresh)
 workspace.py     → per-issue directory lifecycle + hook execution + safety checks
 runner.py        → Copilot SDK JSONRPC-over-stdio subprocess (multi-turn)
-server.py        → optional HTTP extension (dashboard + /api/v1/*)
+server.py        → optional FastAPI HTTP extension (dashboard + /api/v1/*)
 models.py        → dataclasses (Issue, RunningEntry, RetryEntry, OrchestratorState, …)
 errors.py        → typed error hierarchy with stable .code strings
 ```
