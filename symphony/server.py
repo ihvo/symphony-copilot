@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html as html_mod
 import json
 import logging
 from datetime import datetime, timezone
@@ -10,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -52,6 +52,13 @@ class SymphonyServer:
     def __init__(self, orchestrator: Orchestrator) -> None:
         self._orch = orchestrator
         self._app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+        # Allow cross-origin requests from the Next.js dev server
+        self._app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["http://localhost:3000"],
+            allow_methods=["GET", "POST"],
+            allow_headers=["*"],
+        )
         self._setup_routes()
         self._server_task: object | None = None
         self._uvicorn_server: object | None = None
@@ -161,11 +168,6 @@ class SymphonyServer:
         if self._server_task:
             await self._server_task
         logger.info("http_server_stopped")
-
-
-def _esc(val: object) -> str:
-    """HTML-escape a value for safe interpolation."""
-    return html_mod.escape(str(val))
 
 
 def _render_placeholder() -> str:

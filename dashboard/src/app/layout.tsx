@@ -20,9 +20,9 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${geist.variable} ${geistMono.variable}`}>
       <body className="bg-zinc-50 text-zinc-950 font-sans min-h-dvh antialiased">
-        <div className="max-w-[1400px] mx-auto px-6 py-10 md:px-10">
+        <main className="max-w-[1400px] mx-auto px-6 py-10 md:px-10">
           {children}
-        </div>
+        </main>
       </body>
     </html>
   );

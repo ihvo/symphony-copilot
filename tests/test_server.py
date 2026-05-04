@@ -185,3 +185,27 @@ async def test_route_priority_with_static_build(mock_orchestrator, tmp_path):
             resp = await c.get("/")
             assert resp.status_code == 200
             assert "dashboard" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_api_cors_headers(mock_orchestrator, client):
+    """CORS headers present for Next.js dev server origin."""
+    resp = await client.options(
+        "/api/v1/state",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+    # Non-allowed origins should not get CORS headers
+    resp2 = await client.options(
+        "/api/v1/state",
+        headers={
+            "Origin": "http://evil.com",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert "access-control-allow-origin" not in resp2.headers

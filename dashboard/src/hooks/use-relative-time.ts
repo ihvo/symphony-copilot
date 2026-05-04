@@ -12,11 +12,12 @@ const INTERVALS: [number, string][] = [
 function formatRelative(iso: string): string {
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;
   if (diff < 5) return "just now";
-  for (const [threshold, unit] of INTERVALS) {
+  for (let i = 0; i < INTERVALS.length; i++) {
+    const [threshold, unit] = INTERVALS[i];
     if (diff < threshold) {
-      const prev = INTERVALS[INTERVALS.indexOf([threshold, unit]) - 1];
+      const prev = INTERVALS[i - 1];
       if (prev) {
-        return `${Math.floor(diff / prev[0])}${prev[1]} ago`;
+        return `${Math.floor(diff / prev[0])}${unit} ago`;
       }
       return `${Math.floor(diff)}s ago`;
     }

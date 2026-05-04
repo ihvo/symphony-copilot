@@ -4,7 +4,7 @@ import { useStatePolling } from "@/hooks/use-state-polling";
 
 function MetricsSkeleton() {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr] gap-3 mb-8">
+    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-[2fr_1fr_1fr_1fr] gap-3 mb-8">
       {Array.from({ length: 4 }).map((_, i) => (
         <div
           key={i}
@@ -57,7 +57,7 @@ export function MetricsGrid() {
   const runtime = formatRuntime(state.copilot_totals.seconds_running);
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr] gap-3 mb-8">
+    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-[2fr_1fr_1fr_1fr] gap-3 mb-8">
       <MetricCard value={state.counts.running} label="Active Sessions" accent />
       <MetricCard value={state.counts.retrying} label="Retrying" />
       <MetricCard
