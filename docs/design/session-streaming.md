@@ -466,6 +466,23 @@ def _schedule_retry(self, issue_id, attempt, identifier, error, delay_ms):
             },
         ))
 
+# 4. In _terminate_running() — reconciliation kills session:
+def _terminate_running(self, issue_id: str, reason: str, cleanup_workspace: bool = False):
+    entry = self._state.running.pop(issue_id, None)
+    # ... existing termination logic ...
+    if self._event_bus and entry:
+        self._event_bus.publish(StreamEvent(
+            id=self._event_bus.next_id(),
+            event_type="session_killed",
+            issue_id=issue_id,
+            issue_identifier=entry.identifier,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            data={
+                "event": "session_killed",
+                "reason": reason,  # "stall_timeout" | "terminal_state" | "non_active_state"
+            },
+        ))
+
 # Helper method on orchestrator:
 def _publish_stream_event(self, event_type: str, entry: RunningEntry, event: AgentEvent) -> None:
     """Publish to event bus. Failures are logged but never crash the orchestrator."""
@@ -504,7 +521,7 @@ server. If no server is started, the event bus is simply never created — zero 
 | `_handle_worker_exit()` | `session_cancelled` | Worker cancelled (issue closed mid-run) |
 | `_schedule_retry()` | `retry_scheduled` | Retry queued with delay |
 | `_dispatch()` | `session_dispatched` | New session started for an issue |
-| `_reconcile()` | `session_killed` | Stale session removed during reconciliation |
+| `_reconcile()` | `session_killed` | Stale session removed during reconciliation (includes `reason`: `stall_timeout`, `terminal_state`, or `non_active_state`) |
 
 **Last-Event-ID edge cases:**
 - `Last-Event-ID < oldest_buffered_id` → `gap` event sent, then live stream continues
