@@ -1,8 +1,8 @@
-"""Agent runner – Copilot SDK Python client.
+"""Agent runner – harness-agnostic session lifecycle.
 
-Uses the ``github-copilot-sdk`` Python package (``CopilotClient`` /
-``CopilotSession``) instead of raw JSONRPC-over-stdio.  The SDK manages
-subprocess lifecycle, session protocol, and event streaming internally.
+Provides ``run_agent_session()`` (the public entry point for the orchestrator)
+and the ``CopilotHarness`` implementation using ``github-copilot-sdk``.
+A factory (``_create_harness``) selects the active harness based on config.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from copilot.session import PermissionHandler
 
 from symphony.config import ServiceConfig
 from symphony.errors import (
+    ConfigValidationError,
     CopilotNotFoundError,
     InvalidWorkspaceCwdError,
     PortExitError,
@@ -27,6 +28,7 @@ from symphony.errors import (
     TurnInputRequiredError,
     TurnTimeoutError,
 )
+from symphony.harness import AgentHarness
 from symphony.models import AgentEvent, Issue, LiveSession
 
 logger = logging.getLogger("symphony.runner")
@@ -40,11 +42,13 @@ def _make_session_id(thread_id: str, turn_id: str) -> str:
     return f"{thread_id}-{turn_id}"
 
 
-class CopilotAgentSession:
+class CopilotHarness:
     """Manages a live Copilot SDK session with multi-turn support.
 
     Wraps ``CopilotClient`` + ``CopilotSession`` and translates SDK events
     into Symphony ``AgentEvent`` objects for the orchestrator.
+
+    Implements the ``AgentHarness`` protocol.
     """
 
     def __init__(
@@ -229,6 +233,29 @@ class CopilotAgentSession:
         self._started = False
 
 
+# Backward-compat alias
+CopilotAgentSession = CopilotHarness
+
+
+def _create_harness(
+    config: ServiceConfig,
+    workspace_path: str,
+    issue: Issue,
+    on_event: Callable[[AgentEvent], None] | None = None,
+) -> AgentHarness:
+    """Factory: select harness based on config.agent_harness."""
+    harness_name = config.agent_harness
+
+    if harness_name == "copilot":
+        return CopilotHarness(config, workspace_path, issue, on_event=on_event)
+    elif harness_name == "claude":
+        from symphony.claude_runner import ClaudeHarness
+
+        return ClaudeHarness(config, workspace_path, issue, on_event=on_event)
+    else:
+        raise ConfigValidationError(f"Unknown agent harness: {harness_name!r}")
+
+
 async def run_agent_session(
     config: ServiceConfig,
     workspace_path: str,
@@ -243,7 +270,7 @@ async def run_agent_session(
 
     Returns the final :class:`LiveSession` state.
     """
-    session = CopilotAgentSession(config, workspace_path, issue, on_event=on_event)
+    session = _create_harness(config, workspace_path, issue, on_event=on_event)
 
     try:
         await session.start()
