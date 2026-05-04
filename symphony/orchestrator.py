@@ -61,6 +61,9 @@ class Orchestrator:
         self,
         workflow_path: str,
         port: int | None = None,
+        dev_mode: bool = False,
+        dev_instance: str | None = None,
+        dev_seed: int = 0,
     ) -> None:
         self._workflow_path = os.path.abspath(workflow_path)
         self._workflow_dir = os.path.dirname(self._workflow_path)
@@ -75,6 +78,17 @@ class Orchestrator:
         self._running = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._observers: list[Callable[[], None]] = []
+        # Dev mode
+        self._dev_mode = dev_mode
+        self._dev_instance = dev_instance
+        self._dev_seed = dev_seed
+        self._dev_server: Any = None  # SymphonyServer in dev mode
+        self._dev_port: int | None = None
+
+    @property
+    def dev_port(self) -> int | None:
+        """The actual port the dev instance is listening on."""
+        return self._dev_port
 
     @property
     def state(self) -> OrchestratorState:
@@ -103,7 +117,7 @@ class Orchestrator:
             logger.error("config_build_failed error=%s", exc)
             return [str(exc)]
 
-        errors = cfg.validate_dispatch()
+        errors = cfg.validate_dispatch(dev_mode=self._dev_mode)
         if errors:
             logger.error("config_validation_failed errors=%s", errors)
             return errors
@@ -155,6 +169,13 @@ class Orchestrator:
             errors = self._load_and_apply_workflow()
             if errors:
                 logger.error("workflow_reload_failed errors=%s, keeping last good config", errors)
+            elif self._dev_mode:
+                # Reapply dev overlay after successful reload
+                cfg = self._effective_config()
+                if cfg:
+                    from symphony.dev import dev_workspace_root
+                    ws_root = dev_workspace_root(cfg.workspace_root, self._dev_instance or "dev")
+                    self._apply_dev_overlay(ws_root)
 
     # --- Startup ---
 
@@ -182,6 +203,127 @@ class Orchestrator:
 
         logger.info("orchestrator_started poll_interval_ms=%d", self._state.poll_interval_ms)
 
+    async def start_dev_mode(self) -> None:
+        """Start the orchestrator in dev mode.
+
+        Startup sequence:
+        1. Load workflow (with dev validation bypass)
+        2. Apply persistent dev overlay
+        3. Create MockTracker and seed issues
+        4. Start HTTP server with dev routes (gets port)
+        5. Finalize tracker endpoint with actual port
+        6. Create GitHubTrackerClient pointing at self
+        7. Begin polling
+        """
+        from symphony.dev import (
+            MockTracker,
+            cleanup_pid_file,
+            dev_workspace_root,
+            generate_instance_id,
+            mount_dev_routes,
+            write_pid_file,
+            write_port_file,
+        )
+        from symphony.server import SymphonyServer
+
+        self._loop = asyncio.get_running_loop()
+        self._running = True
+
+        # 1. Load workflow (no validation yet — we'll apply overlay first)
+        try:
+            wf = load_workflow(self._workflow_path)
+        except SymphonyError as exc:
+            raise SymphonyError(f"Dev startup failed: {exc}", code="startup_validation_failed") from exc
+
+        cfg = ServiceConfig(wf, self._workflow_dir)
+        self._config = cfg
+        self._last_good_config = cfg
+        self._workflow_mtime = get_workflow_mtime(self._workflow_path)
+
+        # 2. Apply dev overlay
+        instance_id = self._dev_instance or generate_instance_id()
+        self._dev_instance = instance_id
+        ws_root = dev_workspace_root(cfg.workspace_root, instance_id)
+        self._apply_dev_overlay(ws_root)
+
+        # Validate with dev_mode=True (skips api_key check)
+        errors = cfg.validate_dispatch(dev_mode=True)
+        if errors:
+            raise SymphonyError(
+                f"Dev startup validation failed: {'; '.join(errors)}",
+                code="startup_validation_failed",
+            )
+
+        # 3. PID lock
+        write_pid_file(ws_root)
+
+        # 4. Create MockTracker
+        mock_tracker = MockTracker()
+        if self._dev_seed > 0:
+            mock_tracker.seed(self._dev_seed)
+            logger.info("mock_tracker_seeded count=%d", self._dev_seed)
+
+        # 5. Start HTTP server with dev routes
+        server = SymphonyServer(self)
+        mount_dev_routes(server.app, mock_tracker)
+        port = self._cli_port or 0
+        actual_port = await server.start(port)
+        self._dev_server = server
+        self._dev_port = actual_port
+
+        # Write port file for CLI sidecar discovery
+        write_port_file(ws_root, actual_port)
+
+        # 6. Finalize tracker endpoint and create client
+        endpoint = f"http://127.0.0.1:{actual_port}/_dev/github"
+        self._tracker = GitHubTrackerClient(
+            endpoint=endpoint,
+            api_key="dev-token",
+            repo="dev/local",
+            active_states=cfg.active_states,
+            terminal_states=cfg.terminal_states,
+        )
+
+        # Update state
+        self._state.poll_interval_ms = cfg.dev_poll_interval_ms
+        self._state.max_concurrent_agents = cfg.max_concurrent_agents
+
+        # 7. Start event processor and begin polling
+        asyncio.ensure_future(self._process_events())
+        self._schedule_tick(0)
+
+        logger.info(
+            "orchestrator_started_dev instance=%s port=%d workspace=%s poll_interval_ms=%d",
+            instance_id, actual_port, ws_root, cfg.dev_poll_interval_ms,
+        )
+
+    def _apply_dev_overlay(self, workspace_root: str) -> None:
+        """Apply persistent dev mode overrides to current config.
+
+        Called on initial load AND every workflow reload.
+        """
+        cfg = self._config
+        if not cfg:
+            return
+        raw = cfg._raw
+
+        # Ensure tracker section exists
+        if "tracker" not in raw:
+            raw["tracker"] = {}
+        raw["tracker"]["repo"] = "dev/local"
+        raw["tracker"]["api_key"] = "dev-token"
+        raw["tracker"]["kind"] = "github"
+
+        # Workspace override
+        if "workspace" not in raw:
+            raw["workspace"] = {}
+        raw["workspace"]["root"] = workspace_root
+
+        # Polling override from dev section
+        if "polling" not in raw:
+            raw["polling"] = {}
+        raw["polling"]["interval_ms"] = cfg.dev_poll_interval_ms
+
     async def stop(self) -> None:
         """Gracefully stop the orchestrator."""
         self._running = False
@@ -201,6 +343,16 @@ class Orchestrator:
         # Close tracker
         if self._tracker:
             await self._tracker.close()
+
+        # Dev mode cleanup
+        if self._dev_mode:
+            if self._dev_server:
+                await self._dev_server.stop()
+            cfg = self._effective_config()
+            if cfg:
+                from symphony.dev import cleanup_pid_file, dev_workspace_root
+                ws_root = dev_workspace_root(cfg.workspace_root, self._dev_instance or "dev")
+                cleanup_pid_file(ws_root)
 
         logger.info("orchestrator_stopped")
 
@@ -250,7 +402,7 @@ class Orchestrator:
             await self._reconcile()
 
             # 2. Dispatch preflight validation
-            errors = cfg.validate_dispatch()
+            errors = cfg.validate_dispatch(dev_mode=self._dev_mode)
             if errors:
                 logger.error("dispatch_validation_failed errors=%s", errors)
                 self._notify_observers()
@@ -415,16 +567,29 @@ class Orchestrator:
             def on_event(evt: AgentEvent) -> None:
                 self._event_queue.put_nowait(evt)
 
-            session = await run_agent_session(
-                config=cfg,
-                workspace_path=workspace.path,
-                issue=issue,
-                prompt=prompt,
-                attempt=attempt,
-                on_event=on_event,
-                max_turns=cfg.max_turns,
-                fetch_issue_state=_fetch_issue_state,
-            )
+            if self._dev_mode:
+                from symphony.dev_harness import run_dev_agent_session
+                session = await run_dev_agent_session(
+                    config=cfg,
+                    workspace_path=workspace.path,
+                    issue=issue,
+                    prompt=prompt,
+                    attempt=attempt,
+                    on_event=on_event,
+                    max_turns=cfg.dev_agent_turns,
+                    fetch_issue_state=_fetch_issue_state,
+                )
+            else:
+                session = await run_agent_session(
+                    config=cfg,
+                    workspace_path=workspace.path,
+                    issue=issue,
+                    prompt=prompt,
+                    attempt=attempt,
+                    on_event=on_event,
+                    max_turns=cfg.max_turns,
+                    fetch_issue_state=_fetch_issue_state,
+                )
 
             result.success = True
             result.session = session
@@ -776,7 +941,7 @@ class Orchestrator:
         if not cfg or not self._tracker:
             self._state.claimed.discard(issue_id)
             return
-        errors = cfg.validate_dispatch()
+        errors = cfg.validate_dispatch(dev_mode=self._dev_mode)
         if errors:
             self._schedule_retry(
                 issue_id,
