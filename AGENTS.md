@@ -10,6 +10,19 @@ Symphony is a Python asyncio service that polls GitHub Issues, creates per-issue
 4. `uv run symphony WORKFLOW.md` — run the service
 5. `uv run symphony WORKFLOW.md --port 8080` — with HTTP dashboard
 
+### Dashboard (optional — requires Node.js 18+)
+
+```bash
+cd dashboard && npm install && npm run build
+```
+
+This produces `dashboard/out/` which FastAPI serves automatically. Without it, the dashboard shows a placeholder with build instructions. During development:
+
+```bash
+cd dashboard && npm run dev      # starts Next.js on :3000 (proxies API to :8080)
+cd dashboard && npm test         # runs 22 Vitest component tests
+```
+
 ## Module Map
 
 ```

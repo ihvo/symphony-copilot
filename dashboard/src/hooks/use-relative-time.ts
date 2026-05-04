@@ -11,6 +11,8 @@ const INTERVALS: [number, string][] = [
 
 function formatRelative(iso: string): string {
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (isNaN(diff)) return "\u2014";
+  if (diff < 0) return "just now";
   if (diff < 5) return "just now";
   for (let i = 0; i < INTERVALS.length; i++) {
     const [threshold, unit] = INTERVALS[i];

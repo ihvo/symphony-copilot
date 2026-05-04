@@ -12,6 +12,8 @@ const INTERVALS: [number, string][] = [
 
 function formatRelative(iso: string): string {
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (isNaN(diff)) return "\u2014";
+  if (diff < 0) return "just now";
   if (diff < 5) return "just now";
   for (let i = 0; i < INTERVALS.length; i++) {
     const [threshold, unit] = INTERVALS[i];
@@ -50,5 +52,15 @@ describe("formatRelative (relative time logic)", () => {
   it("returns days for >= 86400s", () => {
     const threeDaysAgo = new Date(Date.now() - 259_200_000).toISOString();
     expect(formatRelative(threeDaysAgo)).toBe("3d ago");
+  });
+
+  it("returns em-dash for invalid ISO strings", () => {
+    expect(formatRelative("not-a-date")).toBe("\u2014");
+    expect(formatRelative("")).toBe("\u2014");
+  });
+
+  it("returns 'just now' for future timestamps", () => {
+    const future = new Date(Date.now() + 60_000).toISOString();
+    expect(formatRelative(future)).toBe("just now");
   });
 });
