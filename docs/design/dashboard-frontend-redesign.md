@@ -10,6 +10,7 @@
 |---------|------|---------|
 | 0.1 | 2026-05-04 | Initial design |
 | 0.2 | 2026-05-04 | Incorporated single-model review feedback (5 HIGH issues resolved) |
+| 0.3 | 2026-05-04 | Revised architecture: Next.js static export served by FastAPI |
 
 ## Table of Contents
 
@@ -92,12 +93,12 @@ The Symphony Dashboard (`GET /`) is the primary human interface for observing ag
 | R4 | Visual hierarchy: primary metrics (active sessions, token burn) are immediately scannable |
 | R5 | Clean data tables with minimal borders, monospace numbers, and truncated overflow |
 | R6 | Accessible: proper semantic HTML, ARIA landmarks, contrast ratios AA compliant |
-| R7 | Empty/loading states designed (not just "No data") |
-| R8 | Zero external JS dependencies (inline `<script>` only, ~100 LOC vanilla JS) |
-| R9 | All existing test assertions continue to pass |
-| R10 | Stale/failure indication: visible "last updated" timestamp and connection-lost warning when fetch fails 3+ times |
-| R11 | XSS safety: all dynamic DOM writes use `textContent`/`setAttribute` only — no `innerHTML` for snapshot data |
-| R12 | Graceful fallback: `<meta refresh>` is only removed after first successful fetch+patch proves JS is healthy |
+| R7 | Empty/loading/error states designed with clear visual treatment |
+| R8 | Next.js static export served by FastAPI — single deployment unit |
+| R9 | All existing API test assertions continue to pass |
+| R10 | Stale/failure indication: visible "last updated" timestamp and connection-lost warning |
+| R11 | XSS safety: React's default escaping + no `dangerouslySetInnerHTML` for snapshot data |
+| R12 | Streaming-ready architecture: API layer supports SSE/WebSocket for future real-time event feeds |
 
 ### Nice-to-have
 
@@ -109,80 +110,76 @@ The Symphony Dashboard (`GET /`) is the primary human interface for observing ag
 | N4 | Visual state transitions (fade-in new rows, highlight changes) with `prefers-reduced-motion` respect |
 | N5 | Dark mode support via `prefers-color-scheme` |
 | N6 | Pause polling when tab is hidden (`document.hidden`) to save resources |
+| N7 | Live streaming panel: real-time agent event log via SSE |
+| N8 | Session timeline visualization (turns, events, token usage over time) |
 
 ### Constraints
 
 | ID | Constraint |
 |----|------------|
-| C1 | No `package.json`, no build tools, no npm/node dependencies |
-| C2 | Dashboard must work as a single HTML response (no external static files) |
-| C3 | Must degrade gracefully with JS disabled (server-rendered HTML is the baseline) |
-| C4 | Inline JS: ~100 LOC vanilla JS (no minification step; keep it readable) |
-| C5 | No emoji anywhere in the output |
-| C6 | JS and CSS extracted to module-level constants in server.py (not one giant f-string) |
+| C1 | Dashboard must be buildable offline and served as static files (no Next.js server runtime in production) |
+| C2 | FastAPI remains the single HTTP process — dashboard is mounted as static assets |
+| C3 | No emoji anywhere in the dashboard output |
+| C4 | API endpoints (`/api/v1/*`) remain unchanged — frontend is a pure consumer |
 
 ---
 
 ## 4. Options Evaluation
 
-### Option A: Enhanced Server-Rendered HTML (Inline CSS only)
+### Option A: Next.js Static Export + FastAPI Static Mount (Recommended)
 
-Keep `_render_dashboard()` as a Python f-string producing a complete HTML page with improved CSS.
-
-| Dimension | Assessment |
-|-----------|-----------|
-| Complexity | Very low — CSS-only changes |
-| Refresh | Still uses `<meta http-equiv="refresh">` (flicker remains) |
-| Interactivity | None — static HTML |
-| Maintenance | Easy — single function |
-| Performance | Instant render, no JS overhead |
-
-**Verdict:** Addresses R1, R2, R5, R6, R7 but NOT R3 (smooth refresh).
-
-### Option B: Server-Rendered HTML + Inline Fetch Loop (Recommended)
-
-Keep the server-rendered HTML baseline but add a small inline `<script>` that:
-1. Fetches `/api/v1/state` on interval
-2. Patches DOM in-place (no full reload)
-3. Adds relative timestamps and subtle transitions
+Build a Next.js App Router application in `dashboard/`. Use `output: 'export'` to produce static HTML/JS/CSS in `dashboard/out/`. FastAPI mounts this directory at `/` and serves the API at `/api/v1/*`.
 
 | Dimension | Assessment |
 |-----------|-----------|
-| Complexity | Low — ~80 lines of vanilla JS |
-| Refresh | Smooth in-place DOM update |
-| Interactivity | Clickable issues, relative times, transitions |
-| Maintenance | Moderate — JS logic in Python f-string |
-| Performance | Minimal — one fetch/10s, no framework |
+| Complexity | Moderate — standard Next.js project with well-known patterns |
+| Refresh | Client-side SWR/React Query with automatic revalidation |
+| Interactivity | Full React component tree — streaming panels, charts, expandable details |
+| Maintenance | Excellent — typed components, hot-reload dev, standard testing tools |
+| Performance | Optimized bundle splitting, route-level code splitting, static pre-render |
+| Streaming | EventSource/WebSocket clients trivial in React; architecture ready |
 
-**Verdict:** Addresses ALL must-haves (R1-R9). JS is progressive enhancement over server-rendered baseline.
+**Verdict:** Best balance of developer experience, extensibility (streaming, charts, detail views), and deployment simplicity (single FastAPI process).
 
-### Option C: Full Client-Side SPA (React/Preact via CDN)
+### Option B: Vite + React (Lightweight Alternative)
 
-Serve a minimal HTML shell that loads React/Preact from CDN and renders entirely client-side.
+Same static-export approach but with Vite instead of Next.js. No file-system routing, no App Router.
 
 | Dimension | Assessment |
 |-----------|-----------|
-| Complexity | High — JSX in a CDN script, complex state management |
-| Refresh | Real-time with granular updates |
-| Interactivity | Full — routing, animations, charts |
-| Maintenance | Hard — untestable from Python, version pinning risk |
-| Performance | 50-100KB CDN dependency, FOUC on first load |
+| Complexity | Low — minimal config, fast builds |
+| Routing | Manual (react-router) |
+| Future features | Requires more manual wiring for layouts, loading states |
+| Bundle size | Slightly smaller (no Next.js runtime) |
 
-**Verdict:** Overkill. Violates C1 spirit (keeping it simple Python-only). CDN dependency introduces availability risk for an operational tool.
+**Verdict:** Viable but less ergonomic for a growing dashboard with multiple views. Next.js gives us file-system routing, layouts, loading/error boundaries out of the box.
+
+### Option C: Enhanced Server-Rendered HTML (Previous Approach)
+
+Keep `_render_dashboard()` as a Python f-string with inline vanilla JS.
+
+| Dimension | Assessment |
+|-----------|-----------|
+| Complexity | Low for initial work, high for streaming/interactivity |
+| Streaming | Very hard — would need custom WebSocket client in vanilla JS |
+| Maintenance | Poor at scale — JS in Python f-strings, no type checking, no component reuse |
+| Testing | No React Testing Library, no component tests |
+
+**Verdict:** Doesn't scale to streaming, detail panels, or charts. Ceiling reached quickly.
 
 ### Comparison Matrix
 
-| Criterion | Weight | Option A | Option B | Option C |
-|-----------|--------|----------|----------|----------|
-| Visual quality | 25% | 9 | 9 | 9 |
-| Smooth refresh | 20% | 2 | 9 | 10 |
-| Simplicity | 20% | 10 | 8 | 3 |
-| Zero dependencies | 15% | 10 | 10 | 4 |
-| Interactivity | 10% | 1 | 7 | 10 |
-| Testability | 10% | 10 | 9 | 5 |
-| **Weighted Score** | | **7.3** | **8.8** | **6.7** |
+| Criterion | Weight | Option A (Next.js) | Option B (Vite) | Option C (Inline) |
+|-----------|--------|-------------------|-----------------|-------------------|
+| Visual quality | 20% | 9 | 9 | 7 |
+| Streaming support | 20% | 10 | 9 | 3 |
+| Developer experience | 20% | 10 | 8 | 4 |
+| Simplicity of deploy | 15% | 8 | 9 | 10 |
+| Extensibility | 15% | 10 | 7 | 3 |
+| Testing | 10% | 9 | 8 | 5 |
+| **Weighted Score** | | **9.4** | **8.4** | **5.1** |
 
-**Recommendation: Option B** — best balance of premium UX and operational simplicity.
+**Recommendation: Option A** — Next.js static export provides the best foundation for streaming, detail views, and future dashboard growth while keeping deployment simple (just static files).
 
 ---
 
@@ -191,266 +188,360 @@ Serve a minimal HTML shell that loads React/Preact from CDN and renders entirely
 ### Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Browser                                                     │
-├─────────────────────────────────────────────────────────────┤
-│  Server-rendered HTML (initial paint)                        │
-│    ├── Semantic structure + CSS (inline <style>)             │
-│    ├── Data attributes on dynamic elements                  │
-│    └── Inline <script> (progressive enhancement)            │
-│         ├── fetch(/api/v1/state) every 10s                  │
-│         ├── DOM diffing (update only changed cells)          │
-│         ├── Relative time formatting                         │
-│         └── CSS transition triggers on update               │
-└─────────────────────────────────────────────────────────────┘
-         │                        ▲
-         │ fetch (JSON)           │ HTMLResponse (initial)
-         ▼                        │
-┌─────────────────────────────────────────────────────────────┐
-│  FastAPI (symphony/server.py)                               │
-│    GET /           → _render_dashboard(snapshot) [HTML]      │
-│    GET /api/v1/state → JSON snapshot [for JS refresh]       │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  Browser                                                         │
+├─────────────────────────────────────────────────────────────────┤
+│  Next.js Static Export (React App Router)                        │
+│    ├── /              → Dashboard overview (metrics + tables)    │
+│    ├── /issues/[id]   → Issue detail view (timeline, tokens)    │
+│    └── /stream        → Live event stream panel (future)        │
+│                                                                  │
+│  Data fetching: SWR with 10s revalidation interval              │
+│  Future streaming: EventSource → /api/v1/events (SSE)           │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │ fetch / EventSource
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  FastAPI (symphony/server.py)                                    │
+│    /               → StaticFiles(dashboard/out)                  │
+│    /api/v1/state   → JSON snapshot                               │
+│    /api/v1/{id}    → JSON issue detail                           │
+│    /api/v1/refresh → trigger poll                                │
+│    /api/v1/events  → SSE stream (future)                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Repository Layout
+
+```
+symphony-copilot/
+├── symphony/
+│   ├── server.py          (mounts dashboard/out as static, serves API)
+│   └── ...
+├── dashboard/             (Next.js project)
+│   ├── package.json
+│   ├── next.config.ts     (output: 'export', basePath if needed)
+│   ├── tailwind.config.ts
+│   ├── tsconfig.json
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── layout.tsx       (root layout, fonts, providers)
+│   │   │   ├── page.tsx         (dashboard overview)
+│   │   │   ├── loading.tsx      (skeleton loader)
+│   │   │   ├── error.tsx        (error boundary)
+│   │   │   └── issues/
+│   │   │       └── [id]/
+│   │   │           └── page.tsx (issue detail)
+│   │   ├── components/
+│   │   │   ├── metrics-grid.tsx
+│   │   │   ├── running-table.tsx
+│   │   │   ├── retry-table.tsx
+│   │   │   ├── status-badge.tsx
+│   │   │   └── connection-status.tsx
+│   │   ├── hooks/
+│   │   │   ├── use-state-polling.ts  (SWR wrapper)
+│   │   │   └── use-relative-time.ts
+│   │   └── lib/
+│   │       ├── api.ts           (typed API client)
+│   │       └── types.ts         (API response types)
+│   ├── out/                     (build output — gitignored or committed)
+│   └── ...
+├── pyproject.toml
+└── ...
 ```
 
 ### Key Design Decisions
 
-1. **Progressive enhancement:** Page works fully without JS. Script upgrades the experience by replacing `<meta refresh>` with fetch-based updates.
-2. **DOM patching over innerHTML:** Update individual `<td>` values via `data-field` attributes to preserve scroll position and enable CSS transitions.
-3. **No virtual DOM, no framework:** Vanilla JS with `querySelectorAll` + direct attribute mutation.
-4. **Server-rendered is the source of truth:** The initial HTML render is complete and correct. JS only adds polish.
+1. **Static export (`output: 'export'`):** No Next.js server at runtime. Build produces pure HTML/JS/CSS files.
+2. **FastAPI serves everything:** `StaticFiles` mount at `/` for the dashboard, API routes at `/api/v1/*`.
+3. **SWR for data fetching:** Automatic revalidation, stale-while-revalidate, built-in error/loading states.
+4. **TypeScript throughout:** API response types derived from the Python models, compile-time safety.
+5. **Streaming-ready:** Architecture supports adding SSE endpoints that React components consume via `EventSource`.
+6. **Tailwind CSS v4:** Utility-first styling matching the design system (zinc/emerald palette, Geist font).
 
 ---
 
 ## 6. Component Design
 
-### 6.1 Visual Design System
+### 6.1 Visual Design System (Tailwind Config)
 
-```
-Typography:
-  - Headlines: Outfit 600, tracking-tight
-  - Body: Outfit 400, 0.8125rem
-  - Data/Mono: JetBrains Mono 400, 0.75rem
+```typescript
+// tailwind.config.ts
+import type { Config } from 'tailwindcss'
 
-Colors:
-  --bg:             #fafafa     (page background)
-  --surface:        #ffffff     (cards/tables)
-  --border:         #e4e4e7     (zinc-200)
-  --text-primary:   #18181b     (zinc-950, NOT pure black)
-  --text-secondary: #71717a     (zinc-500)
-  --text-muted:     #a1a1aa     (zinc-400)
-  --accent:         #059669     (emerald-600)
-  --accent-subtle:  #ecfdf5     (emerald-50)
-  --warning:        #d97706     (amber-600)
-  --warning-subtle: #fffbeb     (amber-50)
-
-Layout:
-  - Max-width: 1400px, centered
-  - Metrics grid: 2fr 1fr 1fr 1fr (asymmetric)
-  - Section padding: 3rem 2.5rem (desktop), 1.5rem 1rem (mobile)
-  - Border-radius: 12px (cards), 6px (badges)
-
-Shadows:
-  - sm: 0 1px 2px rgba(0,0,0,0.04)
-  - md: 0 4px 12px -2px rgba(0,0,0,0.06)
-  (Tinted to background hue, not pure black)
-```
-
-### 6.2 Page Layout
-
-```
-┌──────────────────────────────────────────────────────────┐
-│ [Symphony Dashboard]                    [timestamp mono] │  ← header
-├──────────────────────────────────────────────────────────┤
-│ ┌─────────────────┐ ┌────────┐ ┌────────┐ ┌──────────┐ │
-│ │ 3               │ │ 1      │ │ 12,450 │ │ 4m       │ │  ← metrics
-│ │ Active Sessions │ │ Retry  │ │ Tokens │ │ Runtime  │ │     (2fr 1fr 1fr 1fr)
-│ └─────────────────┘ └────────┘ └────────┘ └──────────┘ │
-├──────────────────────────────────────────────────────────┤
-│ RUNNING  3                                               │  ← section header
-│ ┌────────────────────────────────────────────────────┐   │
-│ │ Issue │ State │ Session │ Turns │ Event │ ...      │   │  ← table (divide-y)
-│ │ #14   │ open  │ abc123  │   5   │ turn  │ ...      │   │
-│ │ #21   │ open  │ def456  │   2   │ start │ ...      │   │
-│ └────────────────────────────────────────────────────┘   │
-├──────────────────────────────────────────────────────────┤
-│ RETRY QUEUE  1                                           │  ← section header
-│ ┌────────────────────────────────────────────────────┐   │
-│ │ Issue │ Attempt │ Due At │ Error                   │   │
-│ │ #7    │    2    │ 30s    │ timeout after 60s       │   │
-│ └────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────┘
+export default {
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ['Geist', 'system-ui', 'sans-serif'],
+        mono: ['Geist Mono', 'JetBrains Mono', 'monospace'],
+      },
+      colors: {
+        surface: '#ffffff',
+        border: '#e4e4e7',        // zinc-200
+        'border-subtle': '#f4f4f5', // zinc-100
+        accent: '#059669',         // emerald-600
+        'accent-subtle': '#ecfdf5', // emerald-50
+        warning: '#d97706',        // amber-600
+        'warning-subtle': '#fffbeb', // amber-50
+      },
+      boxShadow: {
+        'card': '0 1px 2px rgba(0,0,0,0.04)',
+        'card-hover': '0 4px 12px -2px rgba(0,0,0,0.06)',
+      },
+      borderRadius: {
+        'card': '12px',
+      },
+    },
+  },
+} satisfies Config
 ```
 
-### 6.3 Inline Script Architecture
+### 6.2 Root Layout
 
-```javascript
-// ~100 lines, extracted to DASHBOARD_SCRIPT constant in server.py
-(function() {
-  // 1. State
-  let controller = null;       // AbortController for in-flight request
-  let lastGenerated = null;    // monotonic freshness check
-  let failures = 0;
-  const INTERVAL_MS = 10_000;
-  const MAX_FAILURES = 3;
-  const metaRefresh = document.querySelector('meta[http-equiv="refresh"]');
-  const statusEl = document.getElementById('refresh-status');
+```tsx
+// src/app/layout.tsx
+import { Geist, Geist_Mono } from 'next/font/google'
 
-  // 2. Fetch with serialization (only one in-flight at a time)
-  async function refresh() {
-    if (document.hidden) return;  // pause when tab hidden
-    if (controller) controller.abort();  // cancel stale request
-    controller = new AbortController();
+const geist = Geist({ subsets: ['latin'], variable: '--font-sans' })
+const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-mono' })
 
-    try {
-      const res = await fetch('/api/v1/state', { signal: controller.signal });
-      if (!res.ok) throw new Error(res.status);
-      const state = await res.json();
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en" className={`${geist.variable} ${geistMono.variable}`}>
+      <body className="bg-zinc-50 text-zinc-950 font-sans min-h-[100dvh]">
+        <div className="max-w-[1400px] mx-auto px-6 py-10 md:px-10">
+          {children}
+        </div>
+      </body>
+    </html>
+  )
+}
+```
 
-      // Monotonic freshness: drop stale responses
-      if (lastGenerated && state.generated_at <= lastGenerated) return;
-      lastGenerated = state.generated_at;
+### 6.3 Data Fetching (SWR Hook)
 
-      patch(state);
-      failures = 0;
+```typescript
+// src/hooks/use-state-polling.ts
+import useSWR from 'swr'
+import type { SystemState } from '@/lib/types'
 
-      // Remove meta-refresh only AFTER first successful patch
-      if (metaRefresh) { metaRefresh.remove(); }
-      if (statusEl) statusEl.textContent = '';
-    } catch (e) {
-      if (e.name === 'AbortError') return;
-      failures++;
-      if (failures >= MAX_FAILURES && statusEl) {
-        statusEl.textContent = 'Connection lost — retrying...';
-      }
-    } finally {
-      controller = null;
+const fetcher = (url: string) => fetch(url).then(r => r.json())
+
+export function useStatePolling() {
+  const { data, error, isLoading, mutate } = useSWR<SystemState>(
+    '/api/v1/state',
+    fetcher,
+    {
+      refreshInterval: 10_000,
+      revalidateOnFocus: true,
+      dedupingInterval: 5_000,
+      // Pause when tab hidden
+      refreshWhenHidden: false,
     }
+  )
+
+  return {
+    state: data,
+    isLoading,
+    isError: !!error,
+    isStale: !data && !isLoading,
+    refresh: mutate,
+  }
+}
+```
+
+### 6.4 API Types (Derived from Python Models)
+
+```typescript
+// src/lib/types.ts
+export interface TokenUsage {
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+}
+
+export interface RunningSession {
+  issue_id: string
+  issue_identifier: string
+  state: string
+  session_id: string
+  turn_count: number
+  last_event: string
+  last_message: string
+  started_at: string
+  last_event_at: string
+  tokens: TokenUsage
+}
+
+export interface RetryEntry {
+  issue_id: string
+  issue_identifier: string
+  attempt: number
+  due_at: string
+  error: string
+}
+
+export interface CopilotTotals {
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  seconds_running: number
+}
+
+export interface SystemState {
+  generated_at: string
+  counts: { running: number; retrying: number }
+  running: RunningSession[]
+  retrying: RetryEntry[]
+  copilot_totals: CopilotTotals
+  rate_limits: Record<string, unknown> | null
+}
+```
+
+### 6.5 Metrics Grid Component
+
+```tsx
+// src/components/metrics-grid.tsx
+'use client'
+
+import { useStatePolling } from '@/hooks/use-state-polling'
+
+export function MetricsGrid() {
+  const { state, isLoading } = useStatePolling()
+
+  if (isLoading) return <MetricsSkeleton />
+
+  const runtime = formatRuntime(state.copilot_totals.seconds_running)
+  const burnRate = state.copilot_totals.seconds_running > 0
+    ? Math.round(state.copilot_totals.total_tokens / (state.copilot_totals.seconds_running / 60))
+    : 0
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr] gap-3 mb-8">
+      <MetricCard value={state.counts.running} label="Active Sessions" accent />
+      <MetricCard value={state.counts.retrying} label="Retrying" />
+      <MetricCard value={state.copilot_totals.total_tokens.toLocaleString()} label="Tokens Used" />
+      <MetricCard value={runtime} label="Runtime" />
+    </div>
+  )
+}
+```
+
+### 6.6 Running Table Component
+
+```tsx
+// src/components/running-table.tsx
+'use client'
+
+import { useStatePolling } from '@/hooks/use-state-polling'
+import { StatusBadge } from './status-badge'
+import { useRelativeTime } from '@/hooks/use-relative-time'
+
+export function RunningTable() {
+  const { state, isLoading } = useStatePolling()
+
+  if (isLoading) return <TableSkeleton rows={3} cols={7} />
+  if (state.running.length === 0) return <EmptyState icon="circle" message="No active sessions" />
+
+  return (
+    <div className="bg-surface border border-border rounded-card shadow-card overflow-hidden">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-border bg-zinc-50/50">
+            <th className="text-left text-[0.6875rem] font-semibold uppercase tracking-wider text-zinc-400 px-4 py-3">Issue</th>
+            {/* ... */}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-zinc-100">
+          {state.running.map(session => (
+            <tr key={session.session_id} className="hover:bg-zinc-50/50 transition-colors">
+              <td className="px-4 py-3 font-semibold text-accent">{session.issue_identifier}</td>
+              <td><StatusBadge status={session.state} /></td>
+              <td className="font-mono text-xs text-zinc-500">{session.session_id}</td>
+              {/* ... */}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+```
+
+### 6.7 Connection Status Component
+
+```tsx
+// src/components/connection-status.tsx
+'use client'
+
+import { useStatePolling } from '@/hooks/use-state-polling'
+
+export function ConnectionStatus() {
+  const { state, isError, isStale } = useStatePolling()
+
+  if (isError) {
+    return (
+      <span role="status" aria-live="polite" className="text-xs font-mono text-amber-600">
+        Connection lost — retrying...
+      </span>
+    )
   }
 
-  // 3. DOM patching — textContent only, NEVER innerHTML
-  function patch(state) {
-    // Update metric values via data-metric attributes
-    document.querySelectorAll('[data-metric]').forEach(el => {
-      const key = el.dataset.metric;
-      const val = resolveMetric(key, state);
-      if (el.textContent !== val) {
-        el.textContent = val;
-        el.classList.add('updated');
-        setTimeout(() => el.classList.remove('updated'), 600);
-      }
-    });
-
-    // Reconcile table rows (keyed by issue_identifier)
-    reconcileTable('running-body', state.running, renderRunningRow);
-    reconcileTable('retry-body', state.retrying, renderRetryRow);
+  if (state?.generated_at) {
+    return (
+      <span className="text-xs font-mono text-zinc-400">
+        {formatRelativeTime(state.generated_at)}
+      </span>
+    )
   }
 
-  // 4. Row reconciliation — keyed by issue_identifier
-  function reconcileTable(tbodyId, items, renderFn) {
-    const tbody = document.getElementById(tbodyId);
-    if (!tbody) return;
-    const existing = new Map();
-    tbody.querySelectorAll('tr[data-key]').forEach(tr => {
-      existing.set(tr.dataset.key, tr);
-    });
+  return null
+}
+```
 
-    // Rebuild in server order
-    const fragment = document.createDocumentFragment();
-    if (items.length === 0) {
-      // Show empty state
-      const emptyRow = tbody.querySelector('.empty-row') || createEmptyRow(tbodyId);
-      fragment.appendChild(emptyRow);
-    } else {
-      items.forEach(item => {
-        const key = item.issue_identifier;
-        const row = existing.get(key) || renderFn(item);
-        updateRow(row, item);
-        fragment.appendChild(row);
-      });
+### 6.8 Future: Streaming Event Panel
+
+```tsx
+// src/components/event-stream.tsx (Phase 3 — SSE)
+'use client'
+
+import { useEffect, useState } from 'react'
+
+interface AgentEvent {
+  timestamp: string
+  issue_identifier: string
+  event_type: string
+  message: string
+}
+
+export function EventStream() {
+  const [events, setEvents] = useState<AgentEvent[]>([])
+
+  useEffect(() => {
+    const source = new EventSource('/api/v1/events')
+    source.onmessage = (e) => {
+      const event = JSON.parse(e.data) as AgentEvent
+      setEvents(prev => [event, ...prev].slice(0, 100)) // keep last 100
     }
-    tbody.replaceChildren(fragment);
-  }
+    return () => source.close()
+  }, [])
 
-  // 5. Relative time helper
-  function relTime(iso) {
-    if (!iso) return '';
-    const delta = (Date.now() - new Date(iso)) / 1000;
-    if (delta < 60) return Math.floor(delta) + 's ago';
-    if (delta < 3600) return Math.floor(delta/60) + 'm ago';
-    return (delta/3600).toFixed(1) + 'h ago';
-  }
-
-  // 6. Start loop + visibility listener
-  setInterval(refresh, INTERVAL_MS);
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) refresh();
-  });
-})();
+  return (
+    <div className="font-mono text-xs space-y-1 max-h-96 overflow-y-auto">
+      {events.map((e, i) => (
+        <div key={i} className="flex gap-3 py-1 border-b border-zinc-100">
+          <span className="text-zinc-400 shrink-0">{formatTime(e.timestamp)}</span>
+          <span className="text-accent font-semibold">{e.issue_identifier}</span>
+          <span className="text-zinc-600 truncate">{e.message}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
 ```
 
-**Key safety properties:**
-- `AbortController` serializes requests — no overlapping fetches
-- `generated_at` comparison drops stale responses that arrive out-of-order
-- Meta-refresh only removed after proven JS success
-- All DOM writes use `textContent` / `setAttribute` — no `innerHTML` for data
-- Rows keyed by `issue_identifier` for stable reconciliation
-- Polling pauses when tab is hidden
-
-### 6.4 Accessibility for Live Updates
-
-```html
-<!-- Status region announces connection state -->
-<span id="refresh-status" role="status" aria-live="polite"></span>
-
-<!-- Tables use aria-live="polite" for screen reader updates -->
-<tbody id="running-body" aria-live="polite" aria-relevant="additions removals">
-```
-
-- `aria-live="polite"` on status and table bodies
-- CSS transitions respect `prefers-reduced-motion: reduce` (disable animations)
-- Semantic `<header>`, `<main>` landmarks in page structure
-
-### 6.5 Empty States
-
-```html
-<!-- Running table empty -->
-<div class="empty">
-  <svg class="empty-icon">...</svg>  <!-- simple circle-info icon -->
-  No active sessions
-</div>
-
-<!-- Retry table empty -->
-<div class="empty">
-  <svg class="empty-icon">...</svg>  <!-- checkmark-circle icon -->
-  No retries queued
-</div>
-```
-
-Inline SVG icons (no external icon library). Clean, centered, muted.
-
-### 6.6 Code Organization in server.py
-
-To avoid one giant f-string blob, the implementation splits concerns:
-
-```python
-# Module-level constants
-FAVICON_SVG = "..."          # existing
-DASHBOARD_CSS = "..."        # extracted ~120 lines
-DASHBOARD_SCRIPT = "..."     # extracted ~100 lines
-
-# Helper functions
-def _render_metric(value, label, css_class=""): ...
-def _render_running_row(entry): ...
-def _render_retry_row(entry): ...
-
-# Main renderer composes the parts
-def _render_dashboard(snapshot): ...
-```
-
-This keeps each piece reviewable and testable in isolation.
-
-### 6.7 Responsive Behavior
+### 6.9 Responsive Behavior
 
 | Breakpoint | Layout |
 |------------|--------|
@@ -464,37 +555,60 @@ This keeps each piece reviewable and testable in isolation.
 
 ### Phase 1: CSS Redesign (Complete)
 
-- Replace old inline styles with new design system
+- Replace old inline styles with premium design system
 - Implement asymmetric metrics grid, clean tables, proper typography
 - Remove emoji from title
 - Add responsive breakpoints
 - **Gate:** All existing tests pass, dashboard renders correctly
 
-### Phase 2: Inline Script (Progressive Enhancement)
+### Phase 2: Next.js Project Setup
 
-- Add `<script>` block at end of body
-- Implement fetch loop replacing meta-refresh
-- Add `data-field` attributes to dynamic elements
-- Implement DOM patching logic
-- Add relative time formatting
-- **Gate:** Dashboard works identically with JS disabled. With JS, updates are smooth.
+- Initialize `dashboard/` with `create-next-app` (App Router, TypeScript, Tailwind)
+- Configure `next.config.ts` with `output: 'export'`
+- Set up Geist font via `next/font/google`
+- Configure Tailwind with the design system tokens
+- Add SWR dependency for data fetching
+- Build static export to `dashboard/out/`
+- Update `server.py` to mount `StaticFiles` at `/` from build output
+- Keep legacy `_render_dashboard()` as fallback when `dashboard/out/` doesn't exist
+- **Gate:** `npm run build` succeeds, FastAPI serves static files, API still works
 
-### Phase 3: Polish (Nice-to-haves)
+### Phase 3: Core Dashboard Components
 
-- Add issue identifier links to detail view
-- Add token burn rate calculation
-- Add CSS transitions for value changes (subtle pulse on update)
-- Add dark mode via `prefers-color-scheme`
-- Add connection status indicator
-- **Gate:** No regressions, polish only adds, never removes.
+- Implement `MetricsGrid`, `RunningTable`, `RetryTable` components
+- Implement `ConnectionStatus` component with stale-data indicator
+- Add `useStatePolling` hook with SWR revalidation
+- Add `useRelativeTime` hook for timestamp formatting
+- Add loading skeletons and error boundaries
+- Add empty state designs
+- **Gate:** Dashboard is fully functional, all data from `/api/v1/state` displayed, responsive
+
+### Phase 4: Detail Views & Interactivity
+
+- Add `/issues/[id]` route consuming `/api/v1/{identifier}`
+- Issue timeline view (turns, events, token usage)
+- Clickable issue identifiers in tables linking to detail view
+- Token burn rate calculation and display
+- Dark mode via Tailwind's `dark:` variants
+- **Gate:** Navigation works, detail data loads, dark mode toggles cleanly
+
+### Phase 5: Streaming (Future)
+
+- Add SSE endpoint `/api/v1/events` to FastAPI (emit from orchestrator event loop)
+- Implement `EventStream` component with `EventSource`
+- Live event log panel with auto-scroll and filters
+- Session timeline with real-time updates
+- **Gate:** Events appear in real-time, no memory leaks, clean disconnect handling
 
 ### Effort Estimate
 
 | Phase | Effort |
 |-------|--------|
-| Phase 1 | 1 day (already done) |
-| Phase 2 | 1 day |
+| Phase 1 | Done |
+| Phase 2 | 0.5 days |
 | Phase 3 | 1-2 days |
+| Phase 4 | 1-2 days |
+| Phase 5 | 2-3 days |
 
 ---
 
@@ -505,25 +619,41 @@ This keeps each piece reviewable and testable in isolation.
 - `test_dashboard_endpoint`: Asserts "Symphony Dashboard", "#1", `rel="icon"`, `data:image/svg+xml,` present in HTML
 - `test_dashboard_html` (integration): Asserts "Symphony Dashboard" in response from real server
 - XSS safety: HTML escaping of all user-supplied data via `_esc()` / `html.escape()`
+- Note: These tests validate the fallback server-rendered HTML (used when `dashboard/out/` is absent)
 
-### New tests to add
+### New tests — Python API layer
 
 | Test | Purpose |
 |------|---------|
-| `test_dashboard_no_emoji` | Assert no emoji codepoints (U+1F000-U+1FFFF) in HTML output |
-| `test_dashboard_responsive_meta` | Assert `viewport` meta tag present |
-| `test_dashboard_accessible_landmarks` | Assert `<header>`, `<main>` or ARIA landmark roles present |
-| `test_dashboard_metric_formatting` | Assert large numbers use comma separators |
-| `test_dashboard_empty_state_text` | Assert friendly empty state messages appear with 0 running |
-| `test_dashboard_xss_safety` | Assert HTML-special chars in issue data are escaped in output |
-| `test_dashboard_script_present` | Assert inline `<script>` block exists (Phase 2) |
-| `test_dashboard_data_attributes` | Assert dynamic elements have `data-metric` / `data-key` (Phase 2) |
-| `test_dashboard_aria_live` | Assert `aria-live` on status region and table bodies (Phase 2) |
-| `test_dashboard_meta_refresh_present` | Assert meta-refresh is in initial HTML (JS removes it after first success) |
+| `test_static_files_served` | Assert FastAPI serves `dashboard/out/index.html` at `/` when build exists |
+| `test_fallback_to_legacy_dashboard` | Assert legacy `_render_dashboard()` used when `dashboard/out/` doesn't exist |
+| `test_api_cors_headers` | Assert proper CORS for local Next.js dev server (`localhost:3000`) |
+
+### New tests — Next.js (Vitest + React Testing Library)
+
+| Test | Purpose |
+|------|---------|
+| `metrics-grid.test.tsx` | Renders metrics from mocked SWR data, shows loading skeleton |
+| `running-table.test.tsx` | Renders running sessions, shows empty state when array is empty |
+| `retry-table.test.tsx` | Renders retry entries with formatted timestamps |
+| `connection-status.test.tsx` | Shows "connection lost" on error state |
+| `use-state-polling.test.ts` | SWR hook revalidates on interval, pauses when hidden |
+| `types.test.ts` | Validate TypeScript types match actual API response shapes |
+| `accessibility.test.tsx` | Assert ARIA roles, landmarks, and screen reader text |
+
+### E2E (Playwright — Phase 4+)
+
+| Test | Purpose |
+|------|---------|
+| `dashboard-loads.spec.ts` | Page loads, metrics visible, no console errors |
+| `issue-navigation.spec.ts` | Click issue → detail view loads |
+| `dark-mode.spec.ts` | Toggle prefers-color-scheme, verify theme switch |
 
 ### Test approach
 
-All tests use the existing `httpx.ASGITransport` pattern from `test_server.py` — no browser testing needed since the dashboard is progressive enhancement over server-rendered HTML.
+- Python tests: existing `httpx.ASGITransport` pattern
+- React tests: Vitest + React Testing Library (fast, no browser needed)
+- E2E: Playwright against built static export served locally
 
 ---
 
@@ -550,25 +680,25 @@ All tests use the existing `httpx.ASGITransport` pattern from `test_server.py` �
 
 ## 10. Decision Records
 
-### ADR-1: No frontend build tooling
+### ADR-1: Next.js with static export
 
-**Context:** Symphony is a pure Python service. Adding npm/node would complicate the development workflow and CI.
+**Context:** The dashboard needs to grow into a full operational interface with streaming, detail views, and interactive panels. Inline HTML in Python f-strings doesn't scale.
 
-**Decision:** All frontend code (HTML, CSS, JS) is inlined in the Python server module.
+**Decision:** Use Next.js App Router with `output: 'export'` producing static HTML/JS/CSS. FastAPI serves the build output via `StaticFiles`.
 
-**Rationale:** The dashboard is ~500 lines of markup/style/script. This doesn't warrant a build step. Inline code is version-controlled alongside the API it renders.
+**Rationale:** Next.js provides file-system routing, layout nesting, loading/error boundaries, `next/font` for optimized font loading, and a mature ecosystem. Static export means no Node.js server at runtime — FastAPI remains the single process.
 
-**Consequences:** No TypeScript, no JSX, no CSS preprocessing. Acceptable for this scope.
+**Consequences:** Adds a `dashboard/` directory with `package.json` and a build step. Developers need Node.js installed for dashboard work. The build output (`dashboard/out/`) can be committed or built in CI.
 
-### ADR-2: Progressive enhancement over SPA
+### ADR-2: SWR for data fetching
 
-**Context:** We could serve a React app from CDN for richer interactivity.
+**Context:** The dashboard needs automatic polling with stale-while-revalidate semantics, deduplication, and pause-when-hidden behavior.
 
-**Decision:** Server-rendered HTML is the baseline. Inline vanilla JS enhances it.
+**Decision:** Use SWR (by Vercel) for all data fetching from `/api/v1/*`.
 
-**Rationale:** An operational monitoring tool must work reliably. CDN dependencies, JS bundle failures, and framework hydration issues are unacceptable for a tool you check during incidents.
+**Rationale:** SWR provides all needed behaviors out of the box: `refreshInterval`, `refreshWhenHidden: false`, `dedupingInterval`, error retry, and cache. It's 4KB gzipped and requires no global state setup (unlike Redux/Zustand).
 
-**Consequences:** Limited interactivity ceiling. If we ever need charts or complex state, we'd revisit.
+**Consequences:** One npm dependency beyond React/Next.js. Lightweight and well-maintained.
 
 ### ADR-3: Emerald accent, not blue/purple
 
@@ -580,22 +710,32 @@ All tests use the existing `httpx.ASGITransport` pattern from `test_server.py` �
 
 **Consequences:** Consistent with the design-taste-frontend skill directives. Single accent keeps visual noise low.
 
-### ADR-4: Outfit + JetBrains Mono typography (optional polish)
+### ADR-4: Geist font family via next/font
 
-**Context:** Inter is the most common AI-generated font choice. The skill bans it.
+**Context:** Inter is the most common AI-generated font choice. The skill bans it. External font CDNs add network dependencies.
 
-**Decision:** Outfit (headlines/body) + JetBrains Mono (data/timestamps) loaded from Google Fonts CDN. System-ui is the immediate fallback.
+**Decision:** Use Geist (sans) + Geist Mono loaded via `next/font/google` which self-hosts the font files in the static export.
 
-**Rationale:** Outfit has personality (geometric, modern) without sacrificing readability. JetBrains Mono is a high-quality monospace designed for code/data.
+**Rationale:** `next/font` downloads fonts at build time and includes them in the static output. No runtime CDN dependency. Geist is the Vercel system font — geometric, modern, excellent for dashboards.
 
-**Consequences:** Requires Google Fonts CDN link. If CDN is unavailable, `system-ui` renders immediately — no layout shift, no FOIT. The fonts are purely aesthetic; the dashboard is fully functional without them. This is acceptable because unlike JS framework CDN failures (which break functionality), font CDN failures only degrade to system fonts.
+**Consequences:** Fonts are bundled in the static export. Zero-layout-shift font loading. No external network requests.
 
-### ADR-5: Graceful degradation over fail-fast
+### ADR-5: Legacy fallback when build doesn't exist
 
-**Context:** The script removes meta-refresh to provide smooth updates. If JS breaks, the page could become permanently stale.
+**Context:** Not all developers will build the frontend. The Python service should still show something useful at `/`.
 
-**Decision:** Meta-refresh is only removed after the first successful fetch+patch cycle. If 3+ consecutive fetches fail, a visible "connection lost" indicator appears.
+**Decision:** Keep `_render_dashboard()` as a fallback when `dashboard/out/` directory doesn't exist. FastAPI checks for the directory on startup and mounts either `StaticFiles` or the legacy HTML handler.
 
-**Rationale:** An operational dashboard must never silently go stale. The worst outcome is an operator believing everything is fine because the dashboard looks normal but hasn't updated in 5 minutes.
+**Rationale:** Ensures `uv run symphony WORKFLOW.md --port 8080` works immediately without `npm run build`. The legacy dashboard is "good enough" for quick checks.
 
-**Consequences:** Slightly more complex JS logic. Worth it for operational safety.
+**Consequences:** Two code paths for `/`. Legacy path will eventually be removed once the Next.js build is standard.
+
+### ADR-6: Streaming via SSE (not WebSocket)
+
+**Context:** Future streaming of agent events needs a real-time transport.
+
+**Decision:** Use Server-Sent Events (SSE) via a new `/api/v1/events` endpoint.
+
+**Rationale:** SSE is simpler than WebSocket for unidirectional server→client data. Works through proxies and load balancers without special configuration. Native browser `EventSource` API with automatic reconnection. FastAPI supports SSE via `StreamingResponse`.
+
+**Consequences:** Unidirectional only (server→client). If bidirectional is ever needed (e.g., sending commands), WebSocket can be added for that specific endpoint. SSE covers the streaming event log use case perfectly.
