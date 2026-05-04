@@ -16,12 +16,22 @@ Symphony is a Python asyncio service that polls GitHub Issues, creates per-issue
 cd dashboard && npm install && npm run build
 ```
 
-This produces `dashboard/out/` which FastAPI serves automatically. Without it, the dashboard shows a placeholder with build instructions. During development:
+This produces `dashboard/out/` which FastAPI serves automatically. Without it, the dashboard shows a placeholder with build instructions.
+
+**Quick start (build + run):**
+
+```bash
+cd dashboard && npm install && npm run build && cd .. && uv run symphony WORKFLOW.md --port 8080
+```
+
+**During development:**
 
 ```bash
 cd dashboard && npm run dev      # starts Next.js on :3000 (proxies API to :8080)
 cd dashboard && npm test         # runs 22 Vitest component tests
 ```
+
+See `dashboard/AGENTS.md` for frontend-specific conventions.
 
 ## Module Map
 
@@ -37,6 +47,7 @@ runner.py        → Copilot SDK JSONRPC-over-stdio subprocess (multi-turn)
 server.py        → optional FastAPI HTTP extension (dashboard + /api/v1/*)
 models.py        → dataclasses (Issue, RunningEntry, RetryEntry, OrchestratorState, …)
 errors.py        → typed error hierarchy with stable .code strings
+dashboard/       → Next.js 15 static-export frontend (see dashboard/AGENTS.md)
 ```
 
 ## Making Changes
@@ -71,6 +82,9 @@ errors.py        → typed error hierarchy with stable .code strings
 | Filesystem operation on workspaces | `workspace.py` — always use `validate_workspace_path()` |
 | Scheduling state mutation | `orchestrator.py` — only in event-processing or tick methods |
 | New HTTP endpoint | `server.py` `_setup_routes()` |
+| New dashboard component | `dashboard/src/components/` — see `dashboard/AGENTS.md` |
+| New React hook | `dashboard/src/hooks/` |
+| Dashboard test | `dashboard/src/__tests__/` — Vitest + RTL |
 
 ## Critical Invariants
 
