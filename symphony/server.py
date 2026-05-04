@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
-import html as html_mod
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 if TYPE_CHECKING:
     from symphony.orchestrator import Orchestrator
 
 logger = logging.getLogger("symphony.server")
+
+# Path to the Next.js static export build output
+DASHBOARD_BUILD_DIR = Path(__file__).parent.parent / "dashboard" / "out"
 
 # Inline SVG favicon – music notes on a dark circle (fits the "Symphony" theme).
 FAVICON_SVG = (
@@ -47,6 +52,13 @@ class SymphonyServer:
     def __init__(self, orchestrator: Orchestrator) -> None:
         self._orch = orchestrator
         self._app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+        # Allow cross-origin requests from the Next.js dev server
+        self._app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["http://localhost:3000"],
+            allow_methods=["GET", "POST"],
+            allow_headers=["*"],
+        )
         self._setup_routes()
         self._server_task: object | None = None
         self._uvicorn_server: object | None = None
@@ -59,10 +71,12 @@ class SymphonyServer:
     def _setup_routes(self) -> None:
         # Static routes BEFORE the parameterized {identifier} route
         @self._app.get("/")
-        async def handle_dashboard() -> HTMLResponse:
-            snapshot = self._orch.get_snapshot()
-            html = _render_dashboard(snapshot)
-            return HTMLResponse(content=html)
+        async def handle_dashboard() -> Response:
+            # Serve static Next.js build if available, otherwise placeholder
+            index_path = DASHBOARD_BUILD_DIR / "index.html"
+            if index_path.is_file():
+                return HTMLResponse(content=index_path.read_text())
+            return HTMLResponse(content=_render_placeholder())
 
         @self._app.get("/favicon.ico")
         async def handle_favicon() -> Response:
@@ -105,6 +119,16 @@ class SymphonyServer:
                 )
             return _json_response(detail)
 
+        # Mount static assets from Next.js build (after explicit routes to avoid conflicts)
+        if DASHBOARD_BUILD_DIR.is_dir():
+            next_assets = DASHBOARD_BUILD_DIR / "_next"
+            if next_assets.is_dir():
+                self._app.mount(
+                    "/_next",
+                    StaticFiles(directory=str(next_assets)),
+                    name="next-assets",
+                )
+
     async def start(self, port: int, host: str = "127.0.0.1") -> int:
         """Start the HTTP server. Returns the actual bound port."""
         import asyncio
@@ -146,94 +170,52 @@ class SymphonyServer:
         logger.info("http_server_stopped")
 
 
-def _esc(val: object) -> str:
-    """HTML-escape a value for safe interpolation."""
-    return html_mod.escape(str(val))
-
-
-def _render_dashboard(snapshot: dict) -> str:
-    """Render a minimal HTML dashboard from a state snapshot."""
-    running = snapshot.get("running", [])
-    retrying = snapshot.get("retrying", [])
-    totals = snapshot.get("copilot_totals", {})
-    counts = snapshot.get("counts", {})
-
-    running_rows = ""
-    for r in running:
-        running_rows += f"""
-        <tr>
-            <td>{_esc(r.get('issue_identifier',''))}</td>
-            <td>{_esc(r.get('state',''))}</td>
-            <td>{_esc(r.get('session_id',''))}</td>
-            <td>{_esc(r.get('turn_count',0))}</td>
-            <td>{_esc(r.get('last_event',''))}</td>
-            <td>{_esc(str(r.get('last_message',''))[:60])}</td>
-            <td>{_esc(r.get('started_at',''))}</td>
-            <td>{_esc(r.get('tokens',{}).get('total_tokens',0))}</td>
-        </tr>"""
-
-    retry_rows = ""
-    for r in retrying:
-        retry_rows += f"""
-        <tr>
-            <td>{_esc(r.get('issue_identifier',''))}</td>
-            <td>{_esc(r.get('attempt',0))}</td>
-            <td>{_esc(r.get('due_at',''))}</td>
-            <td>{_esc(str(r.get('error',''))[:60])}</td>
-        </tr>"""
-
+def _render_placeholder() -> str:
+    """Render a minimal placeholder when the dashboard build is absent."""
     return f"""<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <title>Symphony Dashboard</title>
     <meta charset="utf-8">
-    <meta http-equiv="refresh" content="10">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" href="data:image/svg+xml,{FAVICON_SVG}">
     <style>
-        body {{ font-family: system-ui, sans-serif; margin: 2rem; background: #f8f9fa; }}
-        h1 {{ color: #333; }}
-        table {{ border-collapse: collapse; width: 100%; margin: 1rem 0; }}
-        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 0.9rem; }}
-        th {{ background: #e9ecef; }}
-        .stats {{ display: flex; gap: 2rem; margin: 1rem 0; }}
-        .stat {{ background: white; padding: 1rem 1.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-        .stat-value {{ font-size: 1.5rem; font-weight: bold; color: #333; }}
-        .stat-label {{ font-size: 0.8rem; color: #666; margin-top: 0.25rem; }}
+        body {{
+            font-family: system-ui, -apple-system, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background: #fafafa;
+            color: #18181b;
+        }}
+        .card {{
+            text-align: center;
+            padding: 3rem;
+            background: #fff;
+            border: 1px solid #e4e4e7;
+            border-radius: 12px;
+            max-width: 480px;
+        }}
+        h1 {{ font-size: 1.25rem; margin-bottom: 1rem; }}
+        p {{ color: #71717a; font-size: 0.875rem; line-height: 1.6; }}
+        code {{
+            display: inline-block;
+            margin-top: 1rem;
+            padding: 0.5rem 1rem;
+            background: #f4f4f5;
+            border-radius: 6px;
+            font-size: 0.8125rem;
+            font-family: ui-monospace, monospace;
+        }}
     </style>
 </head>
 <body>
-    <h1>🎵 Symphony Dashboard</h1>
-    <p>Generated: {snapshot.get('generated_at','')}</p>
-
-    <div class="stats">
-        <div class="stat">
-            <div class="stat-value">{counts.get('running', 0)}</div>
-            <div class="stat-label">Running</div>
-        </div>
-        <div class="stat">
-            <div class="stat-value">{counts.get('retrying', 0)}</div>
-            <div class="stat-label">Retrying</div>
-        </div>
-        <div class="stat">
-            <div class="stat-value">{totals.get('total_tokens', 0):,}</div>
-            <div class="stat-label">Total Tokens</div>
-        </div>
-        <div class="stat">
-            <div class="stat-value">{totals.get('seconds_running', 0):.0f}s</div>
-            <div class="stat-label">Runtime</div>
-        </div>
+    <div class="card">
+        <h1>Symphony Dashboard</h1>
+        <p>The dashboard has not been built yet. Build it to get the full interface:</p>
+        <code>cd dashboard && npm install && npm run build</code>
     </div>
-
-    <h2>Running ({counts.get('running', 0)})</h2>
-    <table>
-        <tr><th>Issue</th><th>State</th><th>Session</th><th>Turns</th><th>Last Event</th><th>Message</th><th>Started</th><th>Tokens</th></tr>
-        {running_rows or '<tr><td colspan="8" style="text-align:center;color:#999">No active sessions</td></tr>'}
-    </table>
-
-    <h2>Retry Queue ({counts.get('retrying', 0)})</h2>
-    <table>
-        <tr><th>Issue</th><th>Attempt</th><th>Due At</th><th>Error</th></tr>
-        {retry_rows or '<tr><td colspan="4" style="text-align:center;color:#999">No retries queued</td></tr>'}
-    </table>
 </body>
 </html>"""

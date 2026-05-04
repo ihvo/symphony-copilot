@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-from symphony.server import SymphonyServer
+from symphony.server import SymphonyServer, DASHBOARD_BUILD_DIR
 
 
 @pytest.fixture
@@ -67,14 +68,47 @@ async def test_state_endpoint(mock_orchestrator, client):
 
 
 @pytest.mark.asyncio
-async def test_dashboard_endpoint(mock_orchestrator, client):
-    resp = await client.get("/")
-    assert resp.status_code == 200
-    text = resp.text
-    assert "Symphony Dashboard" in text
-    assert "#1" in text
-    assert 'rel="icon"' in text
-    assert "data:image/svg+xml," in text
+async def test_dashboard_placeholder(mock_orchestrator, tmp_path):
+    """When dashboard build is absent, serve placeholder with build instructions."""
+    fake_build = tmp_path / "nonexistent"
+    with patch("symphony.server.DASHBOARD_BUILD_DIR", fake_build):
+        server = SymphonyServer(mock_orchestrator)
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as c:
+            resp = await c.get("/")
+            assert resp.status_code == 200
+            text = resp.text
+            assert "Symphony Dashboard" in text
+            assert 'rel="icon"' in text
+            assert "data:image/svg+xml," in text
+            assert "npm run build" in text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_static_shell(mock_orchestrator, tmp_path):
+    """When dashboard build exists, serve the static index.html."""
+    build_dir = tmp_path / "out"
+    build_dir.mkdir()
+    (build_dir / "_next").mkdir()
+    index_html = build_dir / "index.html"
+    index_html.write_text(
+        '<!DOCTYPE html><html><head><title>Symphony Dashboard</title>'
+        '<link rel="icon" href="data:image/svg+xml,test"></head>'
+        "<body>Next.js App</body></html>"
+    )
+
+    with patch("symphony.server.DASHBOARD_BUILD_DIR", build_dir):
+        server = SymphonyServer(mock_orchestrator)
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as c:
+            resp = await c.get("/")
+            assert resp.status_code == 200
+            assert "Next.js App" in resp.text
+            assert "Symphony Dashboard" in resp.text
 
 
 @pytest.mark.asyncio
@@ -121,3 +155,57 @@ async def test_favicon_endpoint(client):
 async def test_unsupported_method(mock_orchestrator, client):
     resp = await client.delete("/api/v1/state")
     assert resp.status_code == 405
+
+
+@pytest.mark.asyncio
+async def test_route_priority_with_static_build(mock_orchestrator, tmp_path):
+    """API and favicon routes work even when static dashboard is mounted."""
+    build_dir = tmp_path / "out"
+    build_dir.mkdir()
+    (build_dir / "_next").mkdir()
+    (build_dir / "index.html").write_text("<html>dashboard</html>")
+
+    with patch("symphony.server.DASHBOARD_BUILD_DIR", build_dir):
+        server = SymphonyServer(mock_orchestrator)
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as c:
+            # API still returns JSON
+            resp = await c.get("/api/v1/state")
+            assert resp.status_code == 200
+            assert resp.json()["counts"]["running"] == 1
+
+            # Favicon still works
+            resp = await c.get("/favicon.ico")
+            assert resp.status_code == 200
+            assert "image/svg+xml" in resp.headers["content-type"]
+
+            # Root serves static dashboard
+            resp = await c.get("/")
+            assert resp.status_code == 200
+            assert "dashboard" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_api_cors_headers(mock_orchestrator, client):
+    """CORS headers present for Next.js dev server origin."""
+    resp = await client.options(
+        "/api/v1/state",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+    # Non-allowed origins should not get CORS headers
+    resp2 = await client.options(
+        "/api/v1/state",
+        headers={
+            "Origin": "http://evil.com",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert "access-control-allow-origin" not in resp2.headers
