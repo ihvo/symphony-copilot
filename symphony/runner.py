@@ -145,6 +145,7 @@ class CopilotAgentSession:
         subprocess_cfg = SubprocessConfig(
             cwd=self._workspace,
             github_token=self._config.tracker_api_key or None,
+            use_logged_in_user=True,
         )
 
         try:
