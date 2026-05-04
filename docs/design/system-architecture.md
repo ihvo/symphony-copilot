@@ -116,7 +116,7 @@ Single authoritative in-memory state owned by the orchestrator.
 | `claimed` | set of issue_ids | Reserved/running/retrying |
 | `retry_attempts` | map issue_id → RetryEntry | Pending retries |
 | `completed` | set of issue_ids | Bookkeeping only |
-| `copilot_totals` | TokenTotals | Aggregate tokens + runtime |
+| `copilot_totals` | CopilotTotals | Aggregate tokens + runtime |
 | `copilot_rate_limits` | object or null | Latest rate-limit snapshot |
 
 ### Stable Identifiers
@@ -192,7 +192,7 @@ Environment variables do NOT globally override YAML. Used only when explicitly r
 |-------|---------|-------------|
 | `kind` | — (REQUIRED) | Currently: `github` |
 | `endpoint` | `https://api.github.com` | API base URL |
-| `api_key` | — (REQUIRED) | Token or `$VAR_NAME` |
+| `api_key` | — (REQUIRED) | Token or `$VAR_NAME`. Falls back to `$GITHUB_TOKEN` env when `kind=github` |
 | `repo` | — (REQUIRED) | `owner/repo` format |
 | `active_states` | `["open"]` | States eligible for dispatch |
 | `terminal_states` | `["closed"]` | States triggering cleanup |
@@ -291,12 +291,13 @@ These are Symphony's internal claim states, NOT tracker states.
 
 Tick sequence (every `polling.interval_ms`):
 
-1. Reconcile running issues
-2. Run dispatch preflight validation
-3. Fetch candidate issues from tracker
-4. Sort by dispatch priority
-5. Dispatch eligible issues while slots remain
-6. Notify observers
+1. Check workflow file for hot-reload (mtime comparison)
+2. Reconcile running issues
+3. Run dispatch preflight validation
+4. Fetch candidate issues from tracker
+5. Sort by dispatch priority
+6. Dispatch eligible issues while slots remain
+7. Notify observers
 
 ### Candidate Selection
 
@@ -308,7 +309,7 @@ An issue is dispatch-eligible only if ALL of:
 - Per-state concurrency slots available (if configured)
 - Blocker rule: `Todo` state issues must have no non-terminal blockers
 
-Sort order: `priority` ascending → `created_at` oldest first → `identifier` lexicographic
+Sort order: `priority` ascending (null → last) → `created_at` oldest first (null → last) → `identifier` lexicographic
 
 ### Concurrency Control
 
@@ -374,7 +375,8 @@ Workspaces are reused across runs. Successful runs do NOT auto-delete.
 | `after_run` | After each attempt | Logged, ignored |
 | `before_remove` | Before workspace deletion | Logged, ignored |
 
-Execution: `sh -lc <script>` with workspace as cwd. Timeout: `hooks.timeout_ms` (default 60s).
+Execution: `asyncio.create_subprocess_shell(script, executable="/bin/bash", cwd=workspace)`.
+Not a login shell — `.profile`/`.bash_profile` are NOT sourced. Timeout: `hooks.timeout_ms` (default 60s).
 
 ### Safety Invariants
 
@@ -389,9 +391,10 @@ Execution: `sh -lc <script>` with workspace as cwd. Timeout: `hooks.timeout_ms` 
 ### GitHub Issues (tracker.kind: github)
 
 Operations:
-- `fetch_candidate_issues()` — active-state issues for configured repo (paginated)
+- `fetch_candidate_issues()` — active-state issues for configured repo (paginated, skips PRs)
 - `fetch_issues_by_states(states)` — for startup terminal cleanup
-- `fetch_issue_states_by_ids(ids)` — for active-run reconciliation
+- `fetch_issues_by_numbers(numbers)` — for active-run reconciliation (batch fetch by issue number)
+- `fetch_issue_by_number(number)` — single issue detail fetch
 
 Query semantics:
 - REST API at configured endpoint
@@ -475,9 +478,8 @@ The orchestrator exposes a snapshot containing:
 
 ### Token Accounting
 
-- Prefer absolute thread totals from usage events
-- Track deltas relative to last-reported values (avoid double-counting)
-- Accumulate aggregates in orchestrator state
+- Use absolute thread totals from usage events (not deltas)
+- Accumulate aggregates in orchestrator state on each agent event
 - Runtime reported as live aggregate at snapshot time
 
 ### HTTP Server (optional extension)

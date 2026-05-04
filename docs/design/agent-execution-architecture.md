@@ -41,30 +41,28 @@ and is written exclusively around the Copilot SDK. The actual implementation:
 This document describes the architecture as implemented and serves as the ground truth for the
 agent execution layer.
 
-## 2. Relationship to SPEC.md
+## 2. Relationship to Other Architecture Documents
 
-SPEC.md remains the normative requirements document for Symphony's orchestration, workspace,
-tracker, and observability layers (§7–9, §11–15 are accurate). This design document supersedes
-SPEC.md §10 for the agent execution layer specifically.
+This document covers the agent execution layer. The system-level architecture (orchestration,
+workspace, tracker, observability, failure model, security) is documented in
+`docs/design/system-architecture.md`.
 
-**Sections of SPEC.md that remain accurate:**
-- §7 Orchestrator contract
-- §8 Dispatch, eligibility, concurrency
-- §9 Workspace manager and hooks
-- §11 Issue tracker integration
-- §12 Prompt construction
+**Sections of system-architecture.md that cover adjacent domains:**
+- §5 Orchestrator contract
+- §6 Dispatch, eligibility, concurrency
+- §7 Workspace manager and hooks
+- §8 Issue tracker integration
+- §9 Prompt construction
 - §13 Logging and observability
 - §14 Failure model (with retry clarification below)
 - §15 Security and operational safety
 
-**Sections this document supersedes:**
-- §10.1 Launch Contract — replaces `bash -lc` model with SDK client pattern
-- §10.2 Session Startup — generalizes from Copilot-only to harness protocol
-- §10.3 Streaming Turn Processing — describes actual multi-turn loop
-- §5.3.5 `agent` object — adds `harness` field
-- §5.3.6 `copilot` object — removes `bash -lc` claim
-- §16.5 Worker Attempt pseudocode — fixes `build_turn_prompt()` reference
-- §17.5 Test matrix — removes `bash -lc` assertion
+**Key topics covered here (not in system-architecture.md):**
+- Agent harness protocol and factory pattern
+- SDK client model (replaces former `bash -lc` fiction)
+- Multi-turn loop mechanics
+- `agent`, `copilot`, `claude` configuration contracts
+- Error hierarchy for agent-layer failures
 
 **Existing design documents (details not repeated here):**
 - `docs/design/claude-sdk-agent-harness.md` — rationale for the Protocol abstraction, options
@@ -170,13 +168,15 @@ stable API contract.
 ```python
 subprocess_cfg = SubprocessConfig(
     cwd=workspace_path,
-    github_token=config.tracker_api_key,
+    github_token=config.tracker_api_key or None,
     use_logged_in_user=True,
 )
 client = CopilotClient(subprocess_cfg)
 await client.start()
 session = await client.create_session(
     on_permission_request=PermissionHandler.approve_all,
+    working_directory=workspace_path,
+    on_event=self._handle_sdk_event,
 )
 ```
 
