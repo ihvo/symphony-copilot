@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 from symphony.server import SymphonyServer
@@ -45,33 +46,31 @@ def mock_orchestrator():
 
 
 @pytest.fixture
-def symphony_app(mock_orchestrator):
-    """Return the aiohttp app for testing."""
-    server = SymphonyServer(mock_orchestrator)
-    return server._app
-
-
-@pytest.fixture
 def symphony_server(mock_orchestrator):
     return SymphonyServer(mock_orchestrator)
 
 
+@pytest.fixture
+def client(symphony_server):
+    """Return an httpx AsyncClient wired to the FastAPI app (no real server)."""
+    transport = httpx.ASGITransport(app=symphony_server.app)
+    return httpx.AsyncClient(transport=transport, base_url="http://testserver")
+
+
 @pytest.mark.asyncio
-async def test_state_endpoint(mock_orchestrator, symphony_app, aiohttp_client):
-    client = await aiohttp_client(symphony_app)
+async def test_state_endpoint(mock_orchestrator, client):
     resp = await client.get("/api/v1/state")
-    assert resp.status == 200
-    data = await resp.json()
+    assert resp.status_code == 200
+    data = resp.json()
     assert data["counts"]["running"] == 1
     assert data["copilot_totals"]["total_tokens"] == 700
 
 
 @pytest.mark.asyncio
-async def test_dashboard_endpoint(mock_orchestrator, symphony_app, aiohttp_client):
-    client = await aiohttp_client(symphony_app)
+async def test_dashboard_endpoint(mock_orchestrator, client):
     resp = await client.get("/")
-    assert resp.status == 200
-    text = await resp.text()
+    assert resp.status_code == 200
+    text = resp.text
     assert "Symphony Dashboard" in text
     assert "#1" in text
     assert 'rel="icon"' in text
@@ -79,51 +78,46 @@ async def test_dashboard_endpoint(mock_orchestrator, symphony_app, aiohttp_clien
 
 
 @pytest.mark.asyncio
-async def test_issue_not_found(mock_orchestrator, symphony_app, aiohttp_client):
-    client = await aiohttp_client(symphony_app)
+async def test_issue_not_found(mock_orchestrator, client):
     resp = await client.get("/api/v1/999")
-    assert resp.status == 404
-    data = await resp.json()
+    assert resp.status_code == 404
+    data = resp.json()
     assert data["error"]["code"] == "issue_not_found"
 
 
 @pytest.mark.asyncio
-async def test_issue_found(mock_orchestrator, symphony_app, aiohttp_client):
+async def test_issue_found(mock_orchestrator, client):
     mock_orchestrator.get_issue_detail.return_value = {
         "issue_identifier": "#1",
         "issue_id": "id1",
         "status": "running",
     }
-    client = await aiohttp_client(symphony_app)
     resp = await client.get("/api/v1/1")
-    assert resp.status == 200
-    data = await resp.json()
+    assert resp.status_code == 200
+    data = resp.json()
     assert data["issue_identifier"] == "#1"
 
 
 @pytest.mark.asyncio
-async def test_refresh_endpoint(mock_orchestrator, symphony_app, aiohttp_client):
-    client = await aiohttp_client(symphony_app)
+async def test_refresh_endpoint(mock_orchestrator, client):
     resp = await client.post("/api/v1/refresh")
-    assert resp.status == 202
-    data = await resp.json()
+    assert resp.status_code == 202
+    data = resp.json()
     assert data["queued"] is True
     assert "poll" in data["operations"]
 
 
 @pytest.mark.asyncio
-async def test_favicon_endpoint(symphony_app, aiohttp_client):
-    client = await aiohttp_client(symphony_app)
+async def test_favicon_endpoint(client):
     resp = await client.get("/favicon.ico")
-    assert resp.status == 200
-    assert resp.content_type == "image/svg+xml"
-    text = await resp.text()
+    assert resp.status_code == 200
+    assert "image/svg+xml" in resp.headers["content-type"]
+    text = resp.text
     assert "<svg" in text
-    assert resp.headers.get("Cache-Control") == "public, max-age=86400"
+    assert resp.headers.get("cache-control") == "public, max-age=86400"
 
 
 @pytest.mark.asyncio
-async def test_unsupported_method(mock_orchestrator, symphony_app, aiohttp_client):
-    client = await aiohttp_client(symphony_app)
+async def test_unsupported_method(mock_orchestrator, client):
     resp = await client.delete("/api/v1/state")
-    assert resp.status == 405
+    assert resp.status_code == 405

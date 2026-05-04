@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import html
+import html as html_mod
 import json
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from aiohttp import web
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 if TYPE_CHECKING:
     from symphony.orchestrator import Orchestrator
@@ -28,15 +30,14 @@ FAVICON_SVG = (
 )
 
 
-def _json_response(data: dict, status: int = 200) -> web.Response:
-    return web.Response(
-        text=json.dumps(data, default=str),
-        content_type="application/json",
-        status=status,
+def _json_response(data: dict, status: int = 200) -> JSONResponse:
+    return JSONResponse(
+        content=json.loads(json.dumps(data, default=str)),
+        status_code=status,
     )
 
 
-def _error_response(code: str, message: str, status: int = 400) -> web.Response:
+def _error_response(code: str, message: str, status: int = 400) -> JSONResponse:
     return _json_response({"error": {"code": code, "message": message}}, status=status)
 
 
@@ -45,96 +46,109 @@ class SymphonyServer:
 
     def __init__(self, orchestrator: Orchestrator) -> None:
         self._orch = orchestrator
-        self._app = web.Application()
+        self._app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
         self._setup_routes()
-        self._runner: web.AppRunner | None = None
-        self._site: web.TCPSite | None = None
+        self._server_task: object | None = None
+        self._uvicorn_server: object | None = None
+
+    @property
+    def app(self) -> FastAPI:
+        """Expose the FastAPI app for testing."""
+        return self._app
 
     def _setup_routes(self) -> None:
-        self._app.router.add_get("/", self._handle_dashboard)
-        self._app.router.add_get("/favicon.ico", self._handle_favicon)
-        self._app.router.add_get("/api/v1/state", self._handle_state)
-        self._app.router.add_get("/api/v1/{identifier}", self._handle_issue)
-        self._app.router.add_post("/api/v1/refresh", self._handle_refresh)
+        # Static routes BEFORE the parameterized {identifier} route
+        @self._app.get("/")
+        async def handle_dashboard() -> HTMLResponse:
+            snapshot = self._orch.get_snapshot()
+            html = _render_dashboard(snapshot)
+            return HTMLResponse(content=html)
+
+        @self._app.get("/favicon.ico")
+        async def handle_favicon() -> Response:
+            svg = FAVICON_SVG.replace("%23", "#")
+            return Response(
+                content=svg,
+                media_type="image/svg+xml",
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+
+        @self._app.get("/api/v1/state")
+        async def handle_state() -> JSONResponse:
+            snapshot = self._orch.get_snapshot()
+            return _json_response(snapshot)
+
+        @self._app.post("/api/v1/refresh")
+        async def handle_refresh() -> JSONResponse:
+            self._orch._schedule_tick(0)
+            return _json_response(
+                {
+                    "queued": True,
+                    "coalesced": False,
+                    "requested_at": datetime.now(timezone.utc).isoformat(),
+                    "operations": ["poll", "reconcile"],
+                },
+                status=202,
+            )
+
+        @self._app.get("/api/v1/{identifier}")
+        async def handle_issue(identifier: str) -> JSONResponse:
+            if not identifier.startswith("#"):
+                identifier = f"#{identifier}"
+
+            detail = self._orch.get_issue_detail(identifier)
+            if detail is None:
+                return _error_response(
+                    "issue_not_found",
+                    f"Issue {identifier} not found in current state",
+                    status=404,
+                )
+            return _json_response(detail)
 
     async def start(self, port: int, host: str = "127.0.0.1") -> int:
         """Start the HTTP server. Returns the actual bound port."""
-        self._runner = web.AppRunner(self._app)
-        await self._runner.setup()
-        self._site = web.TCPSite(self._runner, host, port)
-        await self._site.start()
+        import asyncio
+        import uvicorn
+
+        config = uvicorn.Config(
+            app=self._app,
+            host=host,
+            port=port,
+            log_level="warning",
+        )
+        server = uvicorn.Server(config)
+        self._uvicorn_server = server
+
+        # Start serving in a background task
+        self._server_task = asyncio.create_task(server.serve())
+
+        # Wait until the server is actually started and listening
+        while not server.started:
+            await asyncio.sleep(0.01)
 
         # Resolve actual port (for ephemeral port=0)
         actual_port = port
-        if self._site._server and self._site._server.sockets:
-            actual_port = self._site._server.sockets[0].getsockname()[1]
+        if server.servers:
+            for s in server.servers:
+                sockets = s.sockets
+                if sockets:
+                    actual_port = sockets[0].getsockname()[1]
+                    break
 
         logger.info("http_server_started host=%s port=%d", host, actual_port)
         return actual_port
 
     async def stop(self) -> None:
-        if self._runner:
-            await self._runner.cleanup()
+        if self._uvicorn_server:
+            self._uvicorn_server.should_exit = True
+        if self._server_task:
+            await self._server_task
         logger.info("http_server_stopped")
-
-    # --- Handlers ---
-
-    async def _handle_favicon(self, request: web.Request) -> web.Response:
-        """Serve the favicon as an SVG image."""
-        svg = FAVICON_SVG.replace("%23", "#")
-        return web.Response(
-            text=svg,
-            content_type="image/svg+xml",
-            headers={"Cache-Control": "public, max-age=86400"},
-        )
-
-    async def _handle_dashboard(self, request: web.Request) -> web.Response:
-        """Serve a human-readable HTML dashboard."""
-        snapshot = self._orch.get_snapshot()
-        html = _render_dashboard(snapshot)
-        return web.Response(text=html, content_type="text/html")
-
-    async def _handle_state(self, request: web.Request) -> web.Response:
-        """GET /api/v1/state – return runtime state snapshot."""
-        snapshot = self._orch.get_snapshot()
-        return _json_response(snapshot)
-
-    async def _handle_issue(self, request: web.Request) -> web.Response:
-        """GET /api/v1/<identifier> – return issue-specific detail."""
-        identifier = request.match_info["identifier"]
-        # Normalize: add # prefix if not present
-        if not identifier.startswith("#"):
-            identifier = f"#{identifier}"
-
-        detail = self._orch.get_issue_detail(identifier)
-        if detail is None:
-            return _error_response(
-                "issue_not_found",
-                f"Issue {identifier} not found in current state",
-                status=404,
-            )
-        return _json_response(detail)
-
-    async def _handle_refresh(self, request: web.Request) -> web.Response:
-        """POST /api/v1/refresh – trigger an immediate poll cycle."""
-        from datetime import datetime, timezone
-
-        # Schedule an immediate tick
-        self._orch._schedule_tick(0)
-        return _json_response(
-            {
-                "queued": True,
-                "coalesced": False,
-                "requested_at": datetime.now(timezone.utc).isoformat(),
-                "operations": ["poll", "reconcile"],
-            },
-            status=202,
-        )
 
 
 def _esc(val: object) -> str:
     """HTML-escape a value for safe interpolation."""
-    return html.escape(str(val))
+    return html_mod.escape(str(val))
 
 
 def _render_dashboard(snapshot: dict) -> str:

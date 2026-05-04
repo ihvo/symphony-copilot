@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-import aiohttp
+import httpx
 
 from symphony.errors import (
     GitHubApiErrorsError,
@@ -104,24 +104,23 @@ class GitHubTrackerClient:
         self._repo = repo
         self._active_states = [s.lower() for s in (active_states or ["open"])]
         self._terminal_states = [s.lower() for s in (terminal_states or ["closed"])]
-        self._session: aiohttp.ClientSession | None = None
+        self._client: httpx.AsyncClient | None = None
 
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=_NETWORK_TIMEOUT)
-            self._session = aiohttp.ClientSession(
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
                     "Accept": "application/vnd.github+json",
                     "X-GitHub-Api-Version": "2022-11-28",
                 },
-                timeout=timeout,
+                timeout=httpx.Timeout(_NETWORK_TIMEOUT),
             )
-        return self._session
+        return self._client
 
     async def close(self) -> None:
-        if self._session and not self._session.closed:
-            await self._session.close()
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
 
     def update_config(
         self,
@@ -137,25 +136,23 @@ class GitHubTrackerClient:
         self._repo = repo
         self._active_states = [s.lower() for s in active_states]
         self._terminal_states = [s.lower() for s in terminal_states]
-        # Mark session for recreation on next use (picks up new auth)
-        if self._session and not self._session.closed:
-            old = self._session
-            self._session = None
-            asyncio.ensure_future(old.close())
+        # Mark client for recreation on next use (picks up new auth)
+        if self._client and not self._client.is_closed:
+            old = self._client
+            self._client = None
+            asyncio.ensure_future(old.aclose())
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> Any:
-        session = await self._get_session()
+        client = self._get_client()
         try:
-            async with session.request(method, url, **kwargs) as resp:
-                body = await resp.text()
-                if resp.status >= 400:
-                    raise GitHubApiStatusError(resp.status, body[:500])
-                try:
-                    import json
-                    return json.loads(body)
-                except Exception:
-                    raise GitHubUnknownPayloadError(body[:200])
-        except (aiohttp.ClientError, TimeoutError) as exc:
+            resp = await client.request(method, url, **kwargs)
+            if resp.status_code >= 400:
+                raise GitHubApiStatusError(resp.status_code, resp.text[:500])
+            try:
+                return resp.json()
+            except Exception:
+                raise GitHubUnknownPayloadError(resp.text[:200])
+        except httpx.HTTPError as exc:
             raise GitHubApiRequestError(str(exc)) from exc
 
     async def fetch_candidate_issues(self) -> list[Issue]:
