@@ -8,10 +8,8 @@ Claude CLI is required.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,8 +25,7 @@ from symphony.errors import (
 from symphony.models import AgentEvent, Issue, LiveSession, WorkflowDefinition
 from symphony.orchestrator import Orchestrator
 
-from .conftest import FakeGitHub, agent_command, wait_until
-
+from .conftest import wait_until
 
 # ---------------------------------------------------------------------------
 # Mock SDK message types (match real class names for isinstance-by-name checks)
@@ -160,7 +157,9 @@ class TestClaudeHarnessIntegration:
                 content=[TextBlock(text="Turn completed")],
                 usage={"input_tokens": 50, "output_tokens": 25},
             ),
-            ResultMessage(session_id="mock-claude-1", usage={"input_tokens": 50, "output_tokens": 25}),
+            ResultMessage(
+                session_id="mock-claude-1", usage={"input_tokens": 50, "output_tokens": 25}
+            ),
         ]
         client = _mock_claude_client(messages)
         mock_module = _mock_sdk_module(client)
@@ -238,7 +237,7 @@ class TestClaudeHarnessIntegration:
 
         client = _mock_claude_client()
         # connect() will raise TimeoutError when wait_for wraps it
-        client.connect = AsyncMock(side_effect=asyncio.TimeoutError())
+        client.connect = AsyncMock(side_effect=TimeoutError())
         mock_module = _mock_sdk_module(client)
 
         with patch.dict("sys.modules", {"claude_agent_sdk": mock_module}):
@@ -288,9 +287,7 @@ class TestClaudeHarnessIntegration:
 
 class TestOrchestratorClaudeDispatch:
     @pytest.mark.asyncio
-    async def test_orchestrator_selects_claude_harness(
-        self, fake_github, make_workflow, tmp_path
-    ):
+    async def test_orchestrator_selects_claude_harness(self, fake_github, make_workflow, tmp_path):
         """When agent.harness=claude, orchestrator dispatches via ClaudeHarness."""
         fake_github.add_issue(1, state="open")
 

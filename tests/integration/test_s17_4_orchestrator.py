@@ -9,19 +9,17 @@ from __future__ import annotations
 
 import asyncio
 import os
-import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
-from symphony.models import Issue, RunningEntry, LiveSession
 from symphony.orchestrator import Orchestrator
 
-from .conftest import FakeGitHub, agent_command, wait_until
+from .conftest import wait_until
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -70,9 +68,15 @@ async def test_full_dispatch_cycle(fake_github, make_workflow, tmp_path, mock_ag
 @pytest.mark.asyncio
 async def test_dispatch_priority_sort(fake_github, make_workflow, tmp_path, mock_agent_runner):
     """Higher-priority issues (lower number) are dispatched first."""
-    fake_github.add_issue(1, state="open", labels=["priority/3"], created_at="2025-01-01T00:00:00Z")
-    fake_github.add_issue(2, state="open", labels=["priority/1"], created_at="2025-01-02T00:00:00Z")
-    fake_github.add_issue(3, state="open", labels=["priority/2"], created_at="2025-01-01T00:00:00Z")
+    fake_github.add_issue(
+        1, state="open", labels=["priority/3"], created_at="2025-01-01T00:00:00Z"
+    )
+    fake_github.add_issue(
+        2, state="open", labels=["priority/1"], created_at="2025-01-02T00:00:00Z"
+    )
+    fake_github.add_issue(
+        3, state="open", labels=["priority/2"], created_at="2025-01-01T00:00:00Z"
+    )
 
     wf = make_workflow(
         endpoint=fake_github.base_url,
@@ -100,7 +104,9 @@ async def test_dispatch_priority_sort(fake_github, make_workflow, tmp_path, mock
 
 
 @pytest.mark.asyncio
-async def test_reconciliation_terminal_cleans_workspace(fake_github, make_workflow, tmp_path, mock_agent_runner):
+async def test_reconciliation_terminal_cleans_workspace(
+    fake_github, make_workflow, tmp_path, mock_agent_runner
+):
     """When a running issue becomes terminal, the worker is stopped and
     workspace is cleaned."""
     fake_github.add_issue(10, state="open")
@@ -141,7 +147,9 @@ async def test_reconciliation_terminal_cleans_workspace(fake_github, make_workfl
 
 
 @pytest.mark.asyncio
-async def test_reconciliation_non_active_keeps_workspace(fake_github, make_workflow, tmp_path, mock_agent_runner):
+async def test_reconciliation_non_active_keeps_workspace(
+    fake_github, make_workflow, tmp_path, mock_agent_runner
+):
     """Non-active, non-terminal state stops the worker but keeps the workspace."""
     fake_github.add_issue(11, state="open")
     mock_agent_runner["hang_for"].add("NODE_11")
@@ -176,7 +184,9 @@ async def test_reconciliation_non_active_keeps_workspace(fake_github, make_workf
 
 
 @pytest.mark.asyncio
-async def test_stall_detection_kills_and_retries(fake_github, make_workflow, tmp_path, mock_agent_runner):
+async def test_stall_detection_kills_and_retries(
+    fake_github, make_workflow, tmp_path, mock_agent_runner
+):
     """A stalled worker is killed and a retry is scheduled."""
     fake_github.add_issue(20, state="open")
     mock_agent_runner["hang_for"].add("NODE_20")
@@ -210,7 +220,9 @@ async def test_stall_detection_kills_and_retries(fake_github, make_workflow, tmp
 
 
 @pytest.mark.asyncio
-async def test_abnormal_exit_exponential_backoff(fake_github, make_workflow, tmp_path, mock_agent_runner):
+async def test_abnormal_exit_exponential_backoff(
+    fake_github, make_workflow, tmp_path, mock_agent_runner
+):
     """Agent failure schedules a retry with attempt > 0."""
     fake_github.add_issue(30, state="open")
     mock_agent_runner["fail_for"].add("NODE_30")
@@ -241,7 +253,9 @@ async def test_abnormal_exit_exponential_backoff(fake_github, make_workflow, tmp
 
 
 @pytest.mark.asyncio
-async def test_per_state_concurrency_limits(fake_github, make_workflow, tmp_path, mock_agent_runner):
+async def test_per_state_concurrency_limits(
+    fake_github, make_workflow, tmp_path, mock_agent_runner
+):
     """Per-state limit of 1 blocks second issue in the same state."""
     fake_github.add_issue(40, state="open")
     fake_github.add_issue(41, state="open")
@@ -300,7 +314,9 @@ async def test_startup_terminal_workspace_cleanup(fake_github, make_workflow, tm
 
 
 @pytest.mark.asyncio
-async def test_snapshot_reflects_running_and_retry(fake_github, make_workflow, tmp_path, mock_agent_runner):
+async def test_snapshot_reflects_running_and_retry(
+    fake_github, make_workflow, tmp_path, mock_agent_runner
+):
     """Snapshot shows running sessions and retry queue."""
     fake_github.add_issue(60, state="open")
     mock_agent_runner["hang_for"].add("NODE_60")

@@ -42,9 +42,7 @@ function MetricCard({
       >
         {value}
       </div>
-      <div className="text-xs font-medium text-zinc-500 uppercase tracking-wider mt-1">
-        {label}
-      </div>
+      <div className="text-xs font-medium text-zinc-500 uppercase tracking-wider mt-1">{label}</div>
     </div>
   );
 }
@@ -60,10 +58,7 @@ export function MetricsGrid() {
     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-[2fr_1fr_1fr_1fr] gap-3 mb-8">
       <MetricCard value={state.counts.running} label="Active Sessions" accent />
       <MetricCard value={state.counts.retrying} label="Retrying" />
-      <MetricCard
-        value={state.copilot_totals.total_tokens.toLocaleString()}
-        label="Tokens Used"
-      />
+      <MetricCard value={state.copilot_totals.total_tokens.toLocaleString()} label="Tokens Used" />
       <MetricCard value={runtime} label="Runtime" />
     </div>
   );

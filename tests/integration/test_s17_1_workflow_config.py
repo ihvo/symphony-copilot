@@ -6,7 +6,6 @@ These exercise the real orchestrator's reload path: mutate the
 
 from __future__ import annotations
 
-import asyncio
 import time
 
 import pytest
@@ -14,14 +13,15 @@ import pytest
 from symphony.errors import SymphonyError
 from symphony.orchestrator import Orchestrator
 
-
 # ---------------------------------------------------------------------------
 # §17.1 — Workflow changes detected → re-read / re-apply
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_workflow_change_detected_and_reapplied(fake_github, make_workflow, tmp_path, monkeypatch):
+async def test_workflow_change_detected_and_reapplied(
+    fake_github, make_workflow, tmp_path, monkeypatch
+):
     """Changing WORKFLOW.md on disk updates config without restart."""
     monkeypatch.setenv("GITHUB_TOKEN", "tok")
     wf = make_workflow(endpoint=fake_github.base_url, poll_ms=5000)
@@ -36,7 +36,7 @@ async def test_workflow_change_detected_and_reapplied(fake_github, make_workflow
         time.sleep(0.05)
         with open(wf, "w") as f:
             f.write(
-                f"---\ntracker:\n  kind: github\n  endpoint: \"{fake_github.base_url}\"\n"
+                f'---\ntracker:\n  kind: github\n  endpoint: "{fake_github.base_url}"\n'
                 f"  repo: test/repo\n  api_key: tok\npolling:\n  interval_ms: 15000\n"
                 f"copilot:\n  command: echo noop\n---\nV2\n"
             )
@@ -124,7 +124,9 @@ async def test_startup_fails_on_missing_workflow(tmp_path):
 @pytest.mark.asyncio
 async def test_startup_fails_on_unsupported_tracker(tmp_path):
     wf = tmp_path / "WORKFLOW.md"
-    wf.write_text("---\ntracker:\n  kind: jira\n  repo: x\n  api_key: t\ncopilot:\n  command: x\n---\n")
+    wf.write_text(
+        "---\ntracker:\n  kind: jira\n  repo: x\n  api_key: t\ncopilot:\n  command: x\n---\n"
+    )
     orch = Orchestrator(str(wf))
     with pytest.raises(SymphonyError):
         await orch.start()
@@ -138,9 +140,9 @@ async def test_startup_fails_on_unsupported_tracker(tmp_path):
 @pytest.mark.asyncio
 async def test_prompt_renders_through_full_pipeline(fake_github, make_workflow, tmp_path):
     """Verify prompt rendering does not crash for a real issue."""
+    from symphony.config import ServiceConfig
     from symphony.prompt import render_prompt
     from symphony.workflow import load_workflow
-    from symphony.config import ServiceConfig
 
     wf_path = make_workflow(
         endpoint=fake_github.base_url,

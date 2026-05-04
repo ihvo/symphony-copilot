@@ -28,9 +28,7 @@ function formatRelative(iso: string): string {
 }
 
 export function useRelativeTime(iso: string | undefined): string {
-  const [display, setDisplay] = useState(() =>
-    iso ? formatRelative(iso) : ""
-  );
+  const [display, setDisplay] = useState(() => (iso ? formatRelative(iso) : ""));
 
   useEffect(() => {
     if (!iso) return;

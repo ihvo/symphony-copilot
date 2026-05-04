@@ -6,8 +6,6 @@ hits every endpoint.
 
 from __future__ import annotations
 
-import asyncio
-
 import httpx
 import pytest
 
@@ -162,7 +160,7 @@ async def test_dashboard_xss_escaping(fake_github, make_workflow, tmp_path, mock
     port = await server.start(0)
 
     try:
-        ok = await wait_until(lambda: len(orch.state.running) > 0, timeout=5.0)
+        await wait_until(lambda: len(orch.state.running) > 0, timeout=5.0)
         # Even if no issue is running yet, the dashboard should render
         async with httpx.AsyncClient() as c:
             r = await c.get(f"http://127.0.0.1:{port}/")

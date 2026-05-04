@@ -61,22 +61,11 @@ export function RetryTable() {
           </thead>
           <tbody className="divide-y divide-zinc-100">
             {state.retrying.map((entry) => (
-              <tr
-                key={entry.issue_identifier}
-                className="hover:bg-zinc-50/50 transition-colors"
-              >
-                <td className="px-4 py-3 font-semibold text-accent">
-                  {entry.issue_identifier}
-                </td>
-                <td className="px-4 py-3 font-mono text-xs text-zinc-500">
-                  {entry.attempt}
-                </td>
-                <td className="px-4 py-3 font-mono text-xs text-zinc-500">
-                  {entry.due_at}
-                </td>
-                <td className="px-4 py-3 text-zinc-500 text-xs max-w-64 truncate">
-                  {entry.error}
-                </td>
+              <tr key={entry.issue_identifier} className="hover:bg-zinc-50/50 transition-colors">
+                <td className="px-4 py-3 font-semibold text-accent">{entry.issue_identifier}</td>
+                <td className="px-4 py-3 font-mono text-xs text-zinc-500">{entry.attempt}</td>
+                <td className="px-4 py-3 font-mono text-xs text-zinc-500">{entry.due_at}</td>
+                <td className="px-4 py-3 text-zinc-500 text-xs max-w-64 truncate">{entry.error}</td>
               </tr>
             ))}
           </tbody>

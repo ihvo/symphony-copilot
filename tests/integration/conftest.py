@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 import shlex
 import sys
@@ -24,7 +23,6 @@ from typing import Any
 import httpx
 import pytest
 import respx
-
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -70,7 +68,7 @@ class FakeGitHub:
         created_at: str = "2025-01-01T00:00:00Z",
         updated_at: str = "2025-01-01T00:00:00Z",
         is_pr: bool = False,
-    ) -> "FakeGitHub":
+    ) -> FakeGitHub:
         entry: dict[str, Any] = {
             "id": number * 1000,
             "node_id": node_id or f"NODE_{number}",
@@ -146,6 +144,7 @@ class FakeGitHub:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def fake_github():
@@ -253,6 +252,7 @@ def make_workflow(tmp_path):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 async def wait_until(predicate, *, timeout: float = 5.0, poll: float = 0.05) -> bool:
     """Poll *predicate* until truthy or *timeout* seconds elapse."""
     deadline = asyncio.get_event_loop().time() + timeout
@@ -273,18 +273,30 @@ def mock_agent_runner():
     to ``hang_for`` to make the mock sleep forever (for stall tests).
     """
     from unittest.mock import patch
+
     from symphony.models import LiveSession
 
     state: dict = {"calls": [], "fail_for": set(), "hang_for": set()}
 
-    async def fake_run(*, config, workspace_path, issue, prompt, attempt,
-                       on_event=None, max_turns=20, fetch_issue_state=None):
-        state["calls"].append({
-            "issue_id": issue.id,
-            "identifier": issue.identifier,
-            "prompt": prompt,
-            "attempt": attempt,
-        })
+    async def fake_run(
+        *,
+        config,
+        workspace_path,
+        issue,
+        prompt,
+        attempt,
+        on_event=None,
+        max_turns=20,
+        fetch_issue_state=None,
+    ):
+        state["calls"].append(
+            {
+                "issue_id": issue.id,
+                "identifier": issue.identifier,
+                "prompt": prompt,
+                "attempt": attempt,
+            }
+        )
         if issue.id in state["hang_for"]:
             await asyncio.sleep(3600)  # hang until cancelled
             return LiveSession(turn_count=0)

@@ -26,7 +26,9 @@ class TestPromptRendering:
 
     def test_labels_iteration(self):
         template = "Labels: {% for l in issue.labels %}{{ l }} {% endfor %}"
-        result = render_prompt(template, {"labels": ["bug", "p1"], "identifier": "#1", "title": "t"})
+        result = render_prompt(
+            template, {"labels": ["bug", "p1"], "identifier": "#1", "title": "t"}
+        )
         assert "bug" in result
         assert "p1" in result
 

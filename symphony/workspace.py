@@ -13,7 +13,6 @@ from symphony.errors import (
     HookError,
     HookTimeoutError,
     InvalidWorkspacePathError,
-    WorkspaceError,
 )
 from symphony.models import Workspace
 
@@ -70,10 +69,10 @@ async def run_hook(
                 proc.communicate(),
                 timeout=timeout_ms / 1000.0,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             await proc.wait()
-            raise HookTimeoutError(hook_name, timeout_ms)
+            raise HookTimeoutError(hook_name, timeout_ms) from None
 
         if proc.returncode != 0:
             detail = (stderr or stdout or b"").decode(errors="replace")[:500]
@@ -139,7 +138,9 @@ async def cleanup_workspace(
 
     if config.hook_before_remove:
         try:
-            await run_hook("before_remove", config.hook_before_remove, path, config.hook_timeout_ms)
+            await run_hook(
+                "before_remove", config.hook_before_remove, path, config.hook_timeout_ms
+            )
         except Exception:
             logger.warning("before_remove hook failed for %s, proceeding with cleanup", identifier)
 

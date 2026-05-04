@@ -12,8 +12,6 @@ import subprocess
 import sys
 import time
 
-import pytest
-
 PYTHON = sys.executable
 
 
@@ -26,7 +24,9 @@ def test_cli_nonexistent_explicit_path_exits_nonzero(tmp_path):
     """CLI exits nonzero for a nonexistent explicit workflow path."""
     result = subprocess.run(
         [PYTHON, "-m", "symphony", str(tmp_path / "missing.md")],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     assert result.returncode != 0
 
@@ -35,7 +35,9 @@ def test_cli_missing_default_workflow_exits_nonzero(tmp_path):
     """CLI exits nonzero when no ./WORKFLOW.md and no arg given."""
     result = subprocess.run(
         [PYTHON, "-m", "symphony"],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
         cwd=str(tmp_path),
     )
     assert result.returncode != 0
@@ -52,7 +54,9 @@ def test_cli_surfaces_startup_failure(tmp_path):
     wf.write_text("---\ntracker:\n  kind: unsupported\n---\nP")
     result = subprocess.run(
         [PYTHON, "-m", "symphony", str(wf)],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     assert result.returncode != 0
     assert "startup" in result.stderr.lower() or "Unsupported" in result.stderr
@@ -65,7 +69,9 @@ def test_cli_surfaces_missing_api_key(tmp_path):
     env = {k: v for k, v in os.environ.items() if k != "GITHUB_TOKEN"}
     result = subprocess.run(
         [PYTHON, "-m", "symphony", str(wf)],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
         env=env,
     )
     assert result.returncode != 0
@@ -88,7 +94,8 @@ def test_cli_clean_exit_on_sigint(tmp_path):
     )
     proc = subprocess.Popen(
         [PYTHON, "-m", "symphony", str(wf)],
-        stderr=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdout=subprocess.PIPE,
     )
     try:
         # Give the service time to start
@@ -119,7 +126,8 @@ def test_cli_port_flag_starts_server(tmp_path):
     )
     proc = subprocess.Popen(
         [PYTHON, "-m", "symphony", str(wf), "--port", "0"],
-        stderr=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdout=subprocess.PIPE,
         text=True,
     )
     try:

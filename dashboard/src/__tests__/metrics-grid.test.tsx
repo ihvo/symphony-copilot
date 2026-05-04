@@ -20,9 +20,7 @@ describe("MetricsGrid", () => {
       refresh: vi.fn(),
     });
     const { container } = render(<MetricsGrid />);
-    expect(container.querySelectorAll(".animate-pulse").length).toBeGreaterThan(
-      0
-    );
+    expect(container.querySelectorAll(".animate-pulse").length).toBeGreaterThan(0);
   });
 
   it("renders metrics from state data", () => {

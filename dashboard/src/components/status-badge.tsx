@@ -1,8 +1,7 @@
 "use client";
 
 export function StatusBadge({ status }: { status: string }) {
-  const isActive =
-    status === "running" || status === "open" || status === "active";
+  const isActive = status === "running" || status === "open" || status === "active";
   const isRetry = status === "retrying" || status === "retry";
 
   return (

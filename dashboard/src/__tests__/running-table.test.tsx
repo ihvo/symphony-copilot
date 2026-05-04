@@ -20,9 +20,7 @@ describe("RunningTable", () => {
       refresh: vi.fn(),
     });
     const { container } = render(<RunningTable />);
-    expect(container.querySelectorAll(".animate-pulse").length).toBeGreaterThan(
-      0
-    );
+    expect(container.querySelectorAll(".animate-pulse").length).toBeGreaterThan(0);
   });
 
   it("renders empty state when no sessions", () => {

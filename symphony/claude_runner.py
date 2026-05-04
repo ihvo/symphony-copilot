@@ -9,8 +9,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from symphony.config import ServiceConfig
 from symphony.errors import (
@@ -28,7 +29,7 @@ logger = logging.getLogger("symphony.claude_runner")
 
 
 def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class ClaudeHarness:
@@ -84,9 +85,9 @@ class ClaudeHarness:
         """Construct Claude SDK client (subprocess spawned on first turn)."""
         try:
             from claude_agent_sdk import (
-                CLINotFoundError,
                 ClaudeAgentOptions,
                 ClaudeSDKClient,
+                CLINotFoundError,
             )
         except ImportError as exc:
             raise AgentNotFoundError(
@@ -136,13 +137,11 @@ class ClaudeHarness:
         self._saw_result: bool = False
 
         try:
-            await asyncio.wait_for(
-                self._run_turn_impl(prompt, turn_number), timeout=turn_timeout
-            )
-        except asyncio.TimeoutError:
-            raise TurnTimeoutError()
+            await asyncio.wait_for(self._run_turn_impl(prompt, turn_number), timeout=turn_timeout)
+        except TimeoutError:
+            raise TurnTimeoutError() from None
         except asyncio.CancelledError:
-            raise TurnCancelledError()
+            raise TurnCancelledError() from None
         except (TurnTimeoutError, TurnCancelledError, TurnFailedError, TurnInputRequiredError):
             raise
         except Exception as exc:
@@ -153,8 +152,8 @@ class ClaudeHarness:
                     raise AgentNotFoundError("claude", str(exc)) from exc
             err_str = str(exc).lower()
             if "input" in err_str and "required" in err_str:
-                raise TurnInputRequiredError()
-            raise TurnFailedError(str(exc))
+                raise TurnInputRequiredError() from exc
+            raise TurnFailedError(str(exc)) from exc
 
         # If a streamed error was received, fail the turn
         if self._turn_error:
@@ -199,9 +198,7 @@ class ClaudeHarness:
                 self._sdk_session_id = session_id
                 self._session.thread_id = session_id
                 # Recompute session_id now that thread_id is known
-                self._session.session_id = (
-                    f"{self._session.thread_id}-{self._session.turn_id}"
-                )
+                self._session.session_id = f"{self._session.thread_id}-{self._session.turn_id}"
 
             # Check for errors
             is_error = getattr(message, "is_error", False)
@@ -223,7 +220,11 @@ class ClaudeHarness:
                 self._session.copilot_total_tokens = int(total)
                 self._emit(
                     "notification",
-                    usage={"input_tokens": int(inp), "output_tokens": int(out), "total_tokens": total},
+                    usage={
+                        "input_tokens": int(inp),
+                        "output_tokens": int(out),
+                        "total_tokens": total,
+                    },
                 )
 
         elif msg_class == "AssistantMessage":

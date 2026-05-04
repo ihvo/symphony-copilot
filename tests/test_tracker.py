@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from symphony.errors import (
-    GitHubApiStatusError,
     MissingTrackerApiKeyError,
     MissingTrackerRepoError,
 )
@@ -38,12 +35,24 @@ class TestNormalizeIssue:
         assert issue.url == "https://github.com/o/r/issues/42"
 
     def test_labels_normalized_lowercase(self):
-        node = {"id": 1, "number": 1, "title": "t", "state": "open", "labels": [{"name": "BUG"}, {"name": "Feature"}]}
+        node = {
+            "id": 1,
+            "number": 1,
+            "title": "t",
+            "state": "open",
+            "labels": [{"name": "BUG"}, {"name": "Feature"}],
+        }
         issue = _normalize_issue(node)
         assert issue.labels == ["bug", "feature"]
 
     def test_priority_from_label(self):
-        node = {"id": 1, "number": 1, "title": "t", "state": "open", "labels": [{"name": "priority/2"}]}
+        node = {
+            "id": 1,
+            "number": 1,
+            "title": "t",
+            "state": "open",
+            "labels": [{"name": "priority/2"}],
+        }
         issue = _normalize_issue(node)
         assert issue.priority == 2
 

@@ -6,24 +6,18 @@ through the real code.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from datetime import UTC, datetime
 
 import pytest
 
 from symphony.logging_config import configure_logging
 from symphony.models import (
     AgentEvent,
-    CopilotTotals,
-    LiveSession,
-    OrchestratorState,
     RunningEntry,
 )
 from symphony.orchestrator import Orchestrator
-
 
 # ---------------------------------------------------------------------------
 # §17.6 — Validation failures are operator-visible
@@ -53,7 +47,9 @@ async def test_validation_failure_emitted_to_stderr(tmp_path, capfd, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_structured_logs_are_json(fake_github, make_workflow, tmp_path, capfd, mock_agent_runner):
+async def test_structured_logs_are_json(
+    fake_github, make_workflow, tmp_path, capfd, mock_agent_runner
+):
     """All log lines are parseable JSON with required fields."""
     configure_logging("INFO")
     fake_github.add_issue(1, state="open")
@@ -63,6 +59,7 @@ async def test_structured_logs_are_json(fake_github, make_workflow, tmp_path, ca
     await orch.start()
 
     from .conftest import wait_until
+
     await wait_until(lambda: "NODE_1" in orch.state.completed, timeout=8.0)
     await orch.stop()
 
@@ -91,18 +88,26 @@ def test_token_aggregation_across_events(tmp_path, monkeypatch):
     orch._load_and_apply_workflow()
 
     from symphony.models import Issue
+
     entry = RunningEntry(
-        issue_id="id1", identifier="#1",
+        issue_id="id1",
+        identifier="#1",
         issue=Issue(id="id1", identifier="#1", title="t", state="open"),
-        state="open", started_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        state="open",
+        started_at=datetime(2025, 1, 1, tzinfo=UTC),
     )
     orch._state.running["id1"] = entry
 
     # Simulate absolute token events (not delta)
     for total in [100, 250, 400]:
         evt = AgentEvent(
-            event="notification", issue_id="id1",
-            usage={"input_tokens": total, "output_tokens": total // 2, "total_tokens": total + total // 2},
+            event="notification",
+            issue_id="id1",
+            usage={
+                "input_tokens": total,
+                "output_tokens": total // 2,
+                "total_tokens": total + total // 2,
+            },
         )
         orch._handle_agent_event(evt)
 
@@ -124,12 +129,17 @@ def test_logging_failure_does_not_crash():
     which propagates handler errors.  The spec requires the orchestrator
     to survive; our StructuredFormatter itself must not crash.
     """
-    import io
     from symphony.logging_config import StructuredFormatter
 
     fmt = StructuredFormatter()
     record = logging.LogRecord(
-        "test", logging.ERROR, "", 0, "payload %s", ("x",), None,
+        "test",
+        logging.ERROR,
+        "",
+        0,
+        "payload %s",
+        ("x",),
+        None,
     )
     # If the formatter itself raises, that's a real bug.  It should not.
     result = fmt.format(record)
@@ -150,6 +160,7 @@ def test_snapshot_includes_rate_limits(tmp_path, monkeypatch):
     orch._load_and_apply_workflow()
 
     from symphony.models import RateLimitInfo
+
     orch._state.copilot_rate_limits = RateLimitInfo(data={"remaining": 42})
 
     snap = orch.get_snapshot()

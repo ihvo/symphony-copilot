@@ -5,8 +5,6 @@ from __future__ import annotations
 import os
 import tempfile
 
-import pytest
-
 from symphony.config import ServiceConfig
 from symphony.models import WorkflowDefinition
 
@@ -69,7 +67,9 @@ class TestEnvResolution:
         assert cfg.tracker_api_key == "gh_fallback"
 
     def test_api_key_literal(self):
-        cfg = _make_config({"tracker": {"kind": "github", "repo": "o/r", "api_key": "ghp_literal"}})
+        cfg = _make_config(
+            {"tracker": {"kind": "github", "repo": "o/r", "api_key": "ghp_literal"}}
+        )
         assert cfg.tracker_api_key == "ghp_literal"
 
 
@@ -91,13 +91,17 @@ class TestWorkspaceRoot:
 
 class TestPerStateConcurrency:
     def test_normalizes_state_names(self):
-        cfg = _make_config({"agent": {"max_concurrent_agents_by_state": {"Todo": 1, "In Progress": 2}}})
+        cfg = _make_config(
+            {"agent": {"max_concurrent_agents_by_state": {"Todo": 1, "In Progress": 2}}}
+        )
         result = cfg.max_concurrent_agents_by_state
         assert result["todo"] == 1
         assert result["in progress"] == 2
 
     def test_ignores_invalid_values(self):
-        cfg = _make_config({"agent": {"max_concurrent_agents_by_state": {"a": "bad", "b": -1, "c": 0, "d": 3}}})
+        cfg = _make_config(
+            {"agent": {"max_concurrent_agents_by_state": {"a": "bad", "b": -1, "c": 0, "d": 3}}}
+        )
         result = cfg.max_concurrent_agents_by_state
         assert "a" not in result
         assert "b" not in result
@@ -142,13 +146,17 @@ class TestValidation:
     def test_empty_copilot_command_still_valid(self, monkeypatch):
         """copilot.command is no longer validated (SDK manages subprocess)."""
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
-        cfg = _make_config({"tracker": {"kind": "github", "repo": "o/r"}, "copilot": {"command": ""}})
+        cfg = _make_config(
+            {"tracker": {"kind": "github", "repo": "o/r"}, "copilot": {"command": ""}}
+        )
         errors = cfg.validate_dispatch()
         assert errors == []
 
     def test_unknown_harness_rejected(self, monkeypatch):
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
-        cfg = _make_config({"tracker": {"kind": "github", "repo": "o/r"}, "agent": {"harness": "openai"}})
+        cfg = _make_config(
+            {"tracker": {"kind": "github", "repo": "o/r"}, "agent": {"harness": "openai"}}
+        )
         errors = cfg.validate_dispatch()
         assert any("agent.harness" in e for e in errors)
 
@@ -156,7 +164,9 @@ class TestValidation:
         import builtins
 
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
-        cfg = _make_config({"tracker": {"kind": "github", "repo": "o/r"}, "agent": {"harness": "claude"}})
+        cfg = _make_config(
+            {"tracker": {"kind": "github", "repo": "o/r"}, "agent": {"harness": "claude"}}
+        )
 
         original_import = builtins.__import__
 
@@ -197,7 +207,9 @@ class TestAgentHarnessConfig:
 
     def test_invalid_harness_fails_validation(self, monkeypatch):
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
-        cfg = _make_config({"tracker": {"kind": "github", "repo": "o/r"}, "agent": {"harness": "unknown"}})
+        cfg = _make_config(
+            {"tracker": {"kind": "github", "repo": "o/r"}, "agent": {"harness": "unknown"}}
+        )
         errors = cfg.validate_dispatch()
         assert any("must be" in e for e in errors)
 
@@ -210,11 +222,15 @@ class TestAgentHarnessConfig:
         assert cfg.agent_turn_timeout_ms == 7000
 
     def test_agent_stall_timeout_dispatches_copilot(self):
-        cfg = _make_config({"agent": {"harness": "copilot"}, "copilot": {"stall_timeout_ms": 120000}})
+        cfg = _make_config(
+            {"agent": {"harness": "copilot"}, "copilot": {"stall_timeout_ms": 120000}}
+        )
         assert cfg.agent_stall_timeout_ms == 120000
 
     def test_agent_stall_timeout_dispatches_claude(self):
-        cfg = _make_config({"agent": {"harness": "claude"}, "claude": {"stall_timeout_ms": 180000}})
+        cfg = _make_config(
+            {"agent": {"harness": "claude"}, "claude": {"stall_timeout_ms": 180000}}
+        )
         assert cfg.agent_stall_timeout_ms == 180000
 
 

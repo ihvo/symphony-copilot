@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 
 import pytest
 
@@ -17,7 +16,8 @@ def tmp_dir(tmp_path):
 @pytest.fixture
 def workflow_file(tmp_path):
     """Create a valid WORKFLOW.md file and return its path."""
-    content = """---
+    ws_root = str(tmp_path / "workspaces")
+    content = f"""---
 tracker:
   kind: github
   repo: test-owner/test-repo
@@ -34,8 +34,8 @@ copilot:
 ---
 You are working on issue {{{{ issue.identifier }}}}: {{{{ issue.title }}}}
 
-{% if attempt %}This is retry attempt {{{{ attempt }}}}.{% endif %}
-""".format(ws_root=str(tmp_path / "workspaces"))
+{{% if attempt %}}This is retry attempt {{{{ attempt }}}}.{{% endif %}}
+"""
 
     path = tmp_path / "WORKFLOW.md"
     path.write_text(content)

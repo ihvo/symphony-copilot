@@ -19,9 +19,7 @@ export default function Error({
         <circle cx="12" cy="12" r="10" />
         <path d="M12 8v4m0 4h.01" />
       </svg>
-      <h2 className="text-lg font-semibold text-zinc-950 mb-2">
-        Something went wrong
-      </h2>
+      <h2 className="text-lg font-semibold text-zinc-950 mb-2">Something went wrong</h2>
       <p className="text-sm text-zinc-500 mb-4 max-w-md">{error.message}</p>
       <button
         onClick={reset}

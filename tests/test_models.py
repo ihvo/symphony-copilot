@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from symphony.models import BlockerRef, Issue, OrchestratorState, WorkerResult
+from symphony.models import BlockerRef, Issue, OrchestratorState
 
 
 class TestIssue:
@@ -18,7 +18,7 @@ class TestIssue:
             state="open",
             labels=["bug", "p1"],
             blocked_by=[BlockerRef(id="x", identifier="#2", state="open")],
-            created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            created_at=datetime(2025, 1, 1, tzinfo=UTC),
         )
         d = issue.to_template_dict()
         assert d["id"] == "abc"

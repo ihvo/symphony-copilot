@@ -4,21 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 import httpx
 
 from symphony.errors import (
-    GitHubApiErrorsError,
     GitHubApiRequestError,
     GitHubApiStatusError,
     GitHubUnknownPayloadError,
     MissingTrackerApiKeyError,
     MissingTrackerRepoError,
-    UnsupportedTrackerKindError,
 )
-from symphony.models import BlockerRef, Issue
+from symphony.models import Issue
 
 logger = logging.getLogger("symphony.tracker")
 
@@ -150,8 +148,8 @@ class GitHubTrackerClient:
                 raise GitHubApiStatusError(resp.status_code, resp.text[:500])
             try:
                 return resp.json()
-            except Exception:
-                raise GitHubUnknownPayloadError(resp.text[:200])
+            except Exception as exc:
+                raise GitHubUnknownPayloadError(resp.text[:200]) from exc
         except httpx.HTTPError as exc:
             raise GitHubApiRequestError(str(exc)) from exc
 

@@ -47,7 +47,7 @@ def load_workflow(path: str) -> WorkflowDefinition:
         with open(path, encoding="utf-8") as fh:
             raw = fh.read()
     except FileNotFoundError:
-        raise MissingWorkflowFileError(path)
+        raise MissingWorkflowFileError(path) from None
     except OSError as exc:
         raise MissingWorkflowFileError(path) from exc
 

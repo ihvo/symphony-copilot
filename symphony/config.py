@@ -107,10 +107,7 @@ class ServiceConfig:
 
     @property
     def workspace_root(self) -> str:
-        raw = str(
-            _get(self._raw, "workspace", "root", default="")
-            or ""
-        )
+        raw = str(_get(self._raw, "workspace", "root", default="") or "")
         if not raw:
             return os.path.join(tempfile.gettempdir(), "symphony_workspaces")
         resolved = _resolve_env(raw)
@@ -144,8 +141,8 @@ class ServiceConfig:
             if v <= 0:
                 raise ConfigValidationError("hooks.timeout_ms must be positive")
             return v
-        except (TypeError, ValueError):
-            raise ConfigValidationError(f"hooks.timeout_ms invalid: {val!r}")
+        except (TypeError, ValueError) as exc:
+            raise ConfigValidationError(f"hooks.timeout_ms invalid: {val!r}") from exc
 
     # --- agent ---
 
@@ -187,8 +184,8 @@ class ServiceConfig:
             if v <= 0:
                 raise ConfigValidationError("agent.max_turns must be a positive integer")
             return v
-        except (TypeError, ValueError):
-            raise ConfigValidationError(f"agent.max_turns invalid: {val!r}")
+        except (TypeError, ValueError) as exc:
+            raise ConfigValidationError(f"agent.max_turns invalid: {val!r}") from exc
 
     @property
     def max_retry_backoff_ms(self) -> int:
@@ -360,8 +357,6 @@ class ServiceConfig:
             try:
                 import claude_agent_sdk  # noqa: F401
             except ImportError:
-                errors.append(
-                    "agent.harness is 'claude' but claude-agent-sdk is not installed"
-                )
+                errors.append("agent.harness is 'claude' but claude-agent-sdk is not installed")
 
         return errors
