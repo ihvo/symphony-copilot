@@ -322,6 +322,36 @@ class ServiceConfig:
         valid = ("default", "acceptEdits", "plan", "bypassPermissions", "dontAsk", "auto")
         return val if val in valid else "auto"
 
+    # --- dev mode ---
+
+    @property
+    def dev_agent_behavior(self) -> str:
+        return str(_get(self._raw, "dev", "agent_behavior", default="success") or "success")
+
+    @property
+    def dev_agent_turns(self) -> int:
+        val = _get(self._raw, "dev", "agent_turns", default=3)
+        try:
+            return max(1, int(val))
+        except (TypeError, ValueError):
+            return 3
+
+    @property
+    def dev_agent_delay_ms(self) -> int:
+        val = _get(self._raw, "dev", "agent_delay_ms", default=2000)
+        try:
+            return max(0, int(val))
+        except (TypeError, ValueError):
+            return 2000
+
+    @property
+    def dev_poll_interval_ms(self) -> int:
+        val = _get(self._raw, "dev", "poll_interval_ms", default=5000)
+        try:
+            return max(1000, int(val))
+        except (TypeError, ValueError):
+            return 5000
+
     # --- server (extension) ---
 
     @property
@@ -336,15 +366,16 @@ class ServiceConfig:
 
     # --- validation ---
 
-    def validate_dispatch(self) -> list[str]:
+    def validate_dispatch(self, dev_mode: bool = False) -> list[str]:
         """Run dispatch preflight validation. Returns list of error messages (empty = ok)."""
         errors: list[str] = []
         if not self.tracker_kind:
             errors.append("tracker.kind is required")
         elif self.tracker_kind != "github":
             errors.append(f"Unsupported tracker.kind: {self.tracker_kind!r}")
-        if not self.tracker_api_key:
-            errors.append("tracker.api_key is missing after $VAR resolution")
+        if not dev_mode:
+            if not self.tracker_api_key:
+                errors.append("tracker.api_key is missing after $VAR resolution")
         if self.tracker_kind == "github" and not self.tracker_repo:
             errors.append("tracker.repo is required when tracker.kind is 'github'")
 
