@@ -256,3 +256,17 @@ class SnapshotUnavailableError(SymphonyError):
 
     def __init__(self) -> None:
         super().__init__("Runtime snapshot unavailable")
+
+
+# --- Dev mode errors ---
+
+
+class InstanceAlreadyRunningError(SymphonyError):
+    code = "instance_already_running"
+
+    def __init__(self, pid: int) -> None:
+        super().__init__(
+            f"Another dev instance is already running (PID {pid}). "
+            f"Use a different --instance name or stop the existing instance."
+        )
+        self.pid = pid

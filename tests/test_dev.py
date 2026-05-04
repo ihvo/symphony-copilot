@@ -18,9 +18,11 @@ from symphony.dev import (
     dev_workspace_root,
     generate_instance_id,
     mount_dev_routes,
+    validate_instance_id,
     write_pid_file,
     write_port_file,
 )
+from symphony.errors import InstanceAlreadyRunningError
 
 
 class TestMockTracker:
@@ -220,6 +222,17 @@ class TestDevUtilities:
         root = dev_workspace_root("/tmp/workspaces", "alice")
         assert root == "/tmp/workspaces/_dev_alice"
 
+    def test_instance_id_validation_rejects_path_traversal(self):
+        with pytest.raises(ValueError, match="Invalid instance ID"):
+            validate_instance_id("../../etc")
+
+    def test_instance_id_validation_rejects_slashes(self):
+        with pytest.raises(ValueError, match="Invalid instance ID"):
+            dev_workspace_root("/tmp", "foo/bar")
+
+    def test_instance_id_validation_accepts_valid(self):
+        assert validate_instance_id("my-instance_01") == "my-instance_01"
+
     def test_write_port_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             write_port_file(tmpdir, 8234)
@@ -240,7 +253,7 @@ class TestDevUtilities:
         with tempfile.TemporaryDirectory() as tmpdir:
             write_pid_file(tmpdir)
             # Should raise because current process is alive
-            with pytest.raises(RuntimeError, match="Another dev instance"):
+            with pytest.raises(InstanceAlreadyRunningError):
                 write_pid_file(tmpdir)
 
     def test_write_pid_file_stale_pid(self):

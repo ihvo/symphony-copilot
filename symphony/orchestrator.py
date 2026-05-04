@@ -290,6 +290,10 @@ class Orchestrator:
 
         # 7. Start event processor and begin polling
         asyncio.ensure_future(self._process_events())
+
+        # Startup terminal workspace cleanup (same as normal mode)
+        await self._startup_terminal_cleanup()
+
         self._schedule_tick(0)
 
         logger.info(
@@ -301,6 +305,8 @@ class Orchestrator:
         """Apply persistent dev mode overrides to current config.
 
         Called on initial load AND every workflow reload.
+        Also re-updates the tracker client endpoint to prevent reload leaking
+        to production GitHub.
         """
         cfg = self._config
         if not cfg:
@@ -314,6 +320,10 @@ class Orchestrator:
         raw["tracker"]["api_key"] = "dev-token"
         raw["tracker"]["kind"] = "github"
 
+        # Pin tracker endpoint to local dev server
+        if self._dev_port:
+            raw["tracker"]["endpoint"] = f"http://127.0.0.1:{self._dev_port}/_dev/github"
+
         # Workspace override
         if "workspace" not in raw:
             raw["workspace"] = {}
@@ -323,6 +333,16 @@ class Orchestrator:
         if "polling" not in raw:
             raw["polling"] = {}
         raw["polling"]["interval_ms"] = cfg.dev_poll_interval_ms
+
+        # Re-update tracker client to match overlay (prevents reload leak)
+        if self._tracker and self._dev_port:
+            self._tracker.update_config(
+                cfg.tracker_endpoint,
+                cfg.tracker_api_key,
+                cfg.tracker_repo,
+                cfg.active_states,
+                cfg.terminal_states,
+            )
 
     async def stop(self) -> None:
         """Gracefully stop the orchestrator."""

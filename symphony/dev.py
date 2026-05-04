@@ -12,6 +12,8 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from symphony.errors import InstanceAlreadyRunningError
+
 logger = logging.getLogger("symphony.dev")
 
 
@@ -189,8 +191,20 @@ def generate_instance_id() -> str:
     return uuid.uuid4().hex[:8]
 
 
+def validate_instance_id(instance_id: str) -> str:
+    """Validate and sanitize instance ID. Only alphanumeric, hyphens, underscores."""
+    import re as _re
+    if not _re.match(r"^[a-zA-Z0-9_-]+$", instance_id):
+        raise ValueError(
+            f"Invalid instance ID {instance_id!r}: "
+            "must contain only alphanumeric characters, hyphens, and underscores"
+        )
+    return instance_id
+
+
 def dev_workspace_root(base_root: str, instance_id: str) -> str:
     """Compute isolated workspace root for a dev instance."""
+    validate_instance_id(instance_id)
     return os.path.join(base_root, f"_dev_{instance_id}")
 
 
@@ -213,10 +227,7 @@ def write_pid_file(workspace_root: str) -> None:
                 old_pid = int(f.read().strip())
             # Check if process is still alive
             os.kill(old_pid, 0)
-            raise RuntimeError(
-                f"Another dev instance is already running (PID {old_pid}). "
-                f"Use a different --instance name or stop the existing instance."
-            )
+            raise InstanceAlreadyRunningError(old_pid)
         except (OSError, ValueError):
             pass  # Process is dead or file is corrupt — safe to overwrite
 

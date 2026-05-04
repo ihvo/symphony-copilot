@@ -20,6 +20,7 @@ from symphony.errors import (
     TurnCancelledError,
     TurnFailedError,
     TurnInputRequiredError,
+    TurnTimeoutError,
 )
 from symphony.models import AgentEvent, Issue, LiveSession
 
@@ -65,7 +66,7 @@ class DevHarness:
             event=event_name,
             issue_id=self._issue.id,
             timestamp=_now_utc(),
-            copilot_pid=self._proc.pid if self._proc else None,
+            copilot_pid=str(self._proc.pid) if self._proc else None,
             session_id=self._session.session_id or None,
             **kwargs,
         )
@@ -92,10 +93,13 @@ class DevHarness:
         """Read one JSONRPC message from the subprocess."""
         if not self._proc or not self._proc.stdout:
             raise PortExitError(None)
-        line = await asyncio.wait_for(
-            self._proc.stdout.readline(),
-            timeout=self._config.copilot_turn_timeout_ms / 1000.0,
-        )
+        try:
+            line = await asyncio.wait_for(
+                self._proc.stdout.readline(),
+                timeout=self._config.copilot_turn_timeout_ms / 1000.0,
+            )
+        except asyncio.TimeoutError:
+            raise TurnTimeoutError()
         if not line:
             raise PortExitError(self._proc.pid)
         return json.loads(line.decode().strip())
@@ -121,10 +125,10 @@ class DevHarness:
             cwd=self._workspace,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
         )
 
-        self._session.copilot_pid = self._proc.pid
+        self._session.copilot_pid = str(self._proc.pid)
 
         # Send initialize request
         await self._send({"jsonrpc": "2.0", "id": self._next_id(), "method": "initialize", "params": {}})
@@ -207,7 +211,10 @@ class DevHarness:
                 self._proc.terminate()
                 await asyncio.wait_for(self._proc.wait(), timeout=5.0)
             except (asyncio.TimeoutError, ProcessLookupError):
-                self._proc.kill()
+                try:
+                    self._proc.kill()
+                except (ProcessLookupError, OSError):
+                    pass
         self._started = False
 
 
