@@ -6,15 +6,20 @@ import html as html_mod
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 if TYPE_CHECKING:
     from symphony.orchestrator import Orchestrator
 
 logger = logging.getLogger("symphony.server")
+
+# Path to the Next.js static export build output
+DASHBOARD_BUILD_DIR = Path(__file__).parent.parent / "dashboard" / "out"
 
 # Inline SVG favicon – music notes on a dark circle (fits the "Symphony" theme).
 FAVICON_SVG = (
@@ -59,10 +64,12 @@ class SymphonyServer:
     def _setup_routes(self) -> None:
         # Static routes BEFORE the parameterized {identifier} route
         @self._app.get("/")
-        async def handle_dashboard() -> HTMLResponse:
-            snapshot = self._orch.get_snapshot()
-            html = _render_dashboard(snapshot)
-            return HTMLResponse(content=html)
+        async def handle_dashboard() -> Response:
+            # Serve static Next.js build if available, otherwise placeholder
+            index_path = DASHBOARD_BUILD_DIR / "index.html"
+            if index_path.is_file():
+                return HTMLResponse(content=index_path.read_text())
+            return HTMLResponse(content=_render_placeholder())
 
         @self._app.get("/favicon.ico")
         async def handle_favicon() -> Response:
@@ -104,6 +111,16 @@ class SymphonyServer:
                     status=404,
                 )
             return _json_response(detail)
+
+        # Mount static assets from Next.js build (after explicit routes to avoid conflicts)
+        if DASHBOARD_BUILD_DIR.is_dir():
+            next_assets = DASHBOARD_BUILD_DIR / "_next"
+            if next_assets.is_dir():
+                self._app.mount(
+                    "/_next",
+                    StaticFiles(directory=str(next_assets)),
+                    name="next-assets",
+                )
 
     async def start(self, port: int, host: str = "127.0.0.1") -> int:
         """Start the HTTP server. Returns the actual bound port."""
@@ -151,341 +168,52 @@ def _esc(val: object) -> str:
     return html_mod.escape(str(val))
 
 
-def _render_dashboard(snapshot: dict) -> str:
-    """Render the Symphony Dashboard from a state snapshot."""
-    running = snapshot.get("running", [])
-    retrying = snapshot.get("retrying", [])
-    totals = snapshot.get("copilot_totals", {})
-    counts = snapshot.get("counts", {})
-
-    running_rows = ""
-    for r in running:
-        tokens = r.get("tokens", {}).get("total_tokens", 0)
-        running_rows += f"""
-            <tr>
-                <td class="cell-id">{_esc(r.get('issue_identifier',''))}</td>
-                <td><span class="badge badge-active">{_esc(r.get('state',''))}</span></td>
-                <td class="cell-mono">{_esc(r.get('session_id',''))}</td>
-                <td class="cell-mono">{_esc(r.get('turn_count',0))}</td>
-                <td>{_esc(r.get('last_event',''))}</td>
-                <td class="cell-msg">{_esc(str(r.get('last_message',''))[:60])}</td>
-                <td class="cell-mono">{_esc(r.get('started_at',''))}</td>
-                <td class="cell-mono">{tokens:,}</td>
-            </tr>"""
-
-    retry_rows = ""
-    for r in retrying:
-        retry_rows += f"""
-            <tr>
-                <td class="cell-id">{_esc(r.get('issue_identifier',''))}</td>
-                <td class="cell-mono">{_esc(r.get('attempt',0))}</td>
-                <td class="cell-mono">{_esc(r.get('due_at',''))}</td>
-                <td class="cell-msg">{_esc(str(r.get('error',''))[:60])}</td>
-            </tr>"""
-
-    running_count = counts.get("running", 0)
-    retrying_count = counts.get("retrying", 0)
-    total_tokens = totals.get("total_tokens", 0)
-    runtime_s = totals.get("seconds_running", 0)
-
-    # Format runtime as human-readable duration
-    if runtime_s >= 3600:
-        runtime_display = f"{runtime_s / 3600:.1f}h"
-    elif runtime_s >= 60:
-        runtime_display = f"{runtime_s / 60:.0f}m"
-    else:
-        runtime_display = f"{runtime_s:.0f}s"
-
+def _render_placeholder() -> str:
+    """Render a minimal placeholder when the dashboard build is absent."""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <title>Symphony Dashboard</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta http-equiv="refresh" content="10">
     <link rel="icon" href="data:image/svg+xml,{FAVICON_SVG}">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
-        *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-
-        :root {{
-            --bg: #fafafa;
-            --surface: #ffffff;
-            --border: #e4e4e7;
-            --border-subtle: #f4f4f5;
-            --text-primary: #18181b;
-            --text-secondary: #71717a;
-            --text-muted: #a1a1aa;
-            --accent: #059669;
-            --accent-subtle: #ecfdf5;
-            --warning: #d97706;
-            --warning-subtle: #fffbeb;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
-            --shadow-md: 0 4px 12px -2px rgba(0,0,0,0.06);
-            --radius: 12px;
-        }}
-
         body {{
-            font-family: 'Outfit', system-ui, -apple-system, sans-serif;
-            background: var(--bg);
-            color: var(--text-primary);
-            line-height: 1.5;
-            min-height: 100dvh;
-        }}
-
-        .layout {{
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 3rem 2.5rem;
-        }}
-
-        /* Header — left-aligned, asymmetric */
-        .header {{
-            display: grid;
-            grid-template-columns: 1fr auto;
-            align-items: end;
-            gap: 1rem;
-            margin-bottom: 2.5rem;
-            padding-bottom: 1.5rem;
-            border-bottom: 1px solid var(--border);
-        }}
-        .header h1 {{
-            font-size: 1.5rem;
-            font-weight: 600;
-            letter-spacing: -0.025em;
-            color: var(--text-primary);
-        }}
-        .header-meta {{
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            font-family: 'JetBrains Mono', monospace;
-        }}
-
-        /* Metrics — asymmetric grid: primary stat wider */
-        .metrics {{
-            display: grid;
-            grid-template-columns: 2fr 1fr 1fr 1fr;
-            gap: 1rem;
-            margin-bottom: 2.5rem;
-        }}
-        .metric {{
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 1.25rem 1.5rem;
-            box-shadow: var(--shadow-sm);
-            transition: box-shadow 0.2s ease;
-        }}
-        .metric:hover {{
-            box-shadow: var(--shadow-md);
-        }}
-        .metric-value {{
-            font-size: 2rem;
-            font-weight: 700;
-            letter-spacing: -0.03em;
-            color: var(--text-primary);
-            font-family: 'JetBrains Mono', monospace;
-        }}
-        .metric-label {{
-            font-size: 0.75rem;
-            font-weight: 500;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-top: 0.25rem;
-        }}
-        .metric--active .metric-value {{
-            color: var(--accent);
-        }}
-
-        /* Section headers */
-        .section-header {{
+            font-family: system-ui, -apple-system, sans-serif;
             display: flex;
-            align-items: baseline;
-            gap: 0.5rem;
-            margin-bottom: 0.75rem;
-        }}
-        .section-header h2 {{
-            font-size: 0.875rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-        }}
-        .section-count {{
-            font-size: 0.75rem;
-            font-family: 'JetBrains Mono', monospace;
-            color: var(--text-muted);
-        }}
-
-        /* Tables — minimal, clean lines */
-        .table-wrap {{
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            box-shadow: var(--shadow-sm);
-            overflow: hidden;
-            margin-bottom: 2rem;
-        }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.8125rem;
-        }}
-        thead th {{
-            text-align: left;
-            font-size: 0.6875rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: var(--text-muted);
-            padding: 0.75rem 1rem;
-            border-bottom: 1px solid var(--border);
-            background: var(--border-subtle);
-        }}
-        tbody tr {{
-            border-bottom: 1px solid var(--border-subtle);
-            transition: background 0.15s ease;
-        }}
-        tbody tr:last-child {{
-            border-bottom: none;
-        }}
-        tbody tr:hover {{
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
             background: #fafafa;
+            color: #18181b;
         }}
-        td {{
-            padding: 0.75rem 1rem;
-            color: var(--text-primary);
-            vertical-align: middle;
-        }}
-        .cell-id {{
-            font-weight: 600;
-            color: var(--accent);
-        }}
-        .cell-mono {{
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-        }}
-        .cell-msg {{
-            color: var(--text-secondary);
-            max-width: 20rem;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }}
-
-        /* Badges */
-        .badge {{
-            display: inline-block;
-            font-size: 0.6875rem;
-            font-weight: 500;
-            padding: 0.2rem 0.5rem;
-            border-radius: 6px;
-            text-transform: lowercase;
-        }}
-        .badge-active {{
-            background: var(--accent-subtle);
-            color: var(--accent);
-        }}
-        .badge-retry {{
-            background: var(--warning-subtle);
-            color: var(--warning);
-        }}
-
-        /* Empty state */
-        .empty {{
+        .card {{
             text-align: center;
-            padding: 2.5rem 1rem;
-            color: var(--text-muted);
+            padding: 3rem;
+            background: #fff;
+            border: 1px solid #e4e4e7;
+            border-radius: 12px;
+            max-width: 480px;
+        }}
+        h1 {{ font-size: 1.25rem; margin-bottom: 1rem; }}
+        p {{ color: #71717a; font-size: 0.875rem; line-height: 1.6; }}
+        code {{
+            display: inline-block;
+            margin-top: 1rem;
+            padding: 0.5rem 1rem;
+            background: #f4f4f5;
+            border-radius: 6px;
             font-size: 0.8125rem;
-        }}
-        .empty-icon {{
-            width: 2rem;
-            height: 2rem;
-            margin: 0 auto 0.75rem;
-            opacity: 0.4;
-        }}
-
-        /* Responsive collapse */
-        @media (max-width: 768px) {{
-            .layout {{ padding: 1.5rem 1rem; }}
-            .metrics {{ grid-template-columns: 1fr 1fr; }}
-            .table-wrap {{ overflow-x: auto; }}
-            table {{ min-width: 600px; }}
+            font-family: ui-monospace, monospace;
         }}
     </style>
 </head>
 <body>
-    <div class="layout">
-        <header class="header">
-            <h1>Symphony Dashboard</h1>
-            <span class="header-meta">{_esc(snapshot.get('generated_at',''))}</span>
-        </header>
-
-        <div class="metrics">
-            <div class="metric metric--active">
-                <div class="metric-value">{running_count}</div>
-                <div class="metric-label">Active Sessions</div>
-            </div>
-            <div class="metric">
-                <div class="metric-value">{retrying_count}</div>
-                <div class="metric-label">Retrying</div>
-            </div>
-            <div class="metric">
-                <div class="metric-value">{total_tokens:,}</div>
-                <div class="metric-label">Tokens Used</div>
-            </div>
-            <div class="metric">
-                <div class="metric-value">{runtime_display}</div>
-                <div class="metric-label">Runtime</div>
-            </div>
-        </div>
-
-        <div class="section-header">
-            <h2>Running</h2>
-            <span class="section-count">{running_count}</span>
-        </div>
-        <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Issue</th>
-                        <th>State</th>
-                        <th>Session</th>
-                        <th>Turns</th>
-                        <th>Last Event</th>
-                        <th>Message</th>
-                        <th>Started</th>
-                        <th>Tokens</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {running_rows or '<tr><td colspan="8"><div class="empty"><svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>No active sessions</div></td></tr>'}
-                </tbody>
-            </table>
-        </div>
-
-        <div class="section-header">
-            <h2>Retry Queue</h2>
-            <span class="section-count">{retrying_count}</span>
-        </div>
-        <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Issue</th>
-                        <th>Attempt</th>
-                        <th>Due At</th>
-                        <th>Error</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {retry_rows or '<tr><td colspan="4"><div class="empty"><svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>No retries queued</div></td></tr>'}
-                </tbody>
-            </table>
-        </div>
+    <div class="card">
+        <h1>Symphony Dashboard</h1>
+        <p>The dashboard has not been built yet. Build it to get the full interface:</p>
+        <code>cd dashboard && npm install && npm run build</code>
     </div>
 </body>
 </html>"""
