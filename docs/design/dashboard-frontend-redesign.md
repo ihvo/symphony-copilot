@@ -73,7 +73,7 @@ The Symphony Dashboard (`GET /`) is the primary human interface for observing ag
 
 ### Constraints to preserve
 
-- No build step or frontend tooling (pure Python project, `pyproject.toml` only)
+
 - Dashboard HTML must contain "Symphony Dashboard" (test assertion)
 - Must include `rel="icon"` and `data:image/svg+xml,` (test assertion)
 - Issue identifiers must appear verbatim in output (test assertion)
@@ -570,7 +570,7 @@ export function EventStream() {
 - Add SWR dependency for data fetching
 - Build static export to `dashboard/out/`
 - Update `server.py` to mount `StaticFiles` at `/` from build output
-- Keep legacy `_render_dashboard()` as fallback when `dashboard/out/` doesn't exist
+- When `dashboard/out/` absent, serve a minimal placeholder with build instructions
 - **Gate:** `npm run build` succeeds, FastAPI serves static files, API still works
 
 ### Phase 3: Core Dashboard Components
@@ -626,7 +626,7 @@ export function EventStream() {
 | Test | Purpose |
 |------|---------|
 | `test_static_files_served` | Assert FastAPI serves `dashboard/out/index.html` at `/` when build exists |
-| `test_fallback_to_legacy_dashboard` | Assert legacy `_render_dashboard()` used when `dashboard/out/` doesn't exist |
+| `test_fallback_placeholder` | Assert placeholder HTML with build instructions served when `dashboard/out/` absent |
 | `test_api_cors_headers` | Assert proper CORS for local Next.js dev server (`localhost:3000`) |
 
 ### New tests — Next.js (Vitest + React Testing Library)
@@ -720,15 +720,15 @@ export function EventStream() {
 
 **Consequences:** Fonts are bundled in the static export. Zero-layout-shift font loading. No external network requests.
 
-### ADR-5: Legacy fallback when build doesn't exist
+### ADR-5: Placeholder when build doesn't exist
 
-**Context:** Not all developers will build the frontend. The Python service should still show something useful at `/`.
+**Context:** Not all developers will build the frontend. The Python service should still respond at `/` with something useful rather than a 404.
 
-**Decision:** Keep `_render_dashboard()` as a fallback when `dashboard/out/` directory doesn't exist. FastAPI checks for the directory on startup and mounts either `StaticFiles` or the legacy HTML handler.
+**Decision:** When `dashboard/out/` doesn't exist, serve a minimal HTML placeholder with a reminder to build the dashboard (`cd dashboard && npm run build`). Remove the legacy `_render_dashboard()` once the Next.js dashboard ships.
 
-**Rationale:** Ensures `uv run symphony WORKFLOW.md --port 8080` works immediately without `npm run build`. The legacy dashboard is "good enough" for quick checks.
+**Rationale:** Maintaining two dashboard implementations is a maintenance trap. The placeholder is ~10 lines of HTML, not a second dashboard. It tells the operator exactly what to do.
 
-**Consequences:** Two code paths for `/`. Legacy path will eventually be removed once the Next.js build is standard.
+**Consequences:** `GET /` always returns something. No dual-maintenance burden. Developers must run the build to get the real dashboard.
 
 ### ADR-6: Streaming via SSE (not WebSocket)
 
