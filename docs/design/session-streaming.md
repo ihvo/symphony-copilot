@@ -905,6 +905,96 @@ async def test_sse_disconnect_during_replay():
 
 ---
 
+## 8.1 Multi-SDK Implications (Claude SDK Support)
+
+The spec (§10) is written around "the targeted Copilot SDK" but uses language that implies
+SDK-swappability. Adding Claude SDK (Anthropic) support has specific implications for the
+streaming design:
+
+### Why the streaming design is already SDK-agnostic
+
+The EventBus operates at the **normalized event layer** — it publishes `StreamEvent` objects
+derived from `AgentEvent`, which is Symphony's internal event vocabulary (SPEC §10.4):
+
+```
+┌─────────────────────┐     ┌─────────────────────┐
+│ CopilotAgentSession │     │ ClaudeAgentSession  │   (future)
+│                     │     │                     │
+│ SDK events:         │     │ SDK events:         │
+│ • assistant.usage   │     │ • content_block_*   │
+│ • session.idle      │     │ • message_start     │
+│ • assistant.message │     │ • message_delta     │
+│ • session.error     │     │ • message_stop      │
+└────────┬────────────┘     └────────┬────────────┘
+         │ _emit()                   │ _emit()
+         ▼                           ▼
+    ┌──────────────────────────────────────┐
+    │  AgentEvent (normalized vocabulary)  │
+    │  • session_started                   │
+    │  • turn_completed                    │
+    │  • turn_failed                       │
+    │  • notification (+ message/usage)    │
+    └──────────────────┬───────────────────┘
+                       │
+                       ▼
+              ┌────────────────┐
+              │   EventBus     │  ← SDK-agnostic
+              │   StreamEvent  │
+              └────────────────┘
+```
+
+**The runner is the normalization adapter.** Each SDK runner translates its SDK-specific event
+types into Symphony's standard `AgentEvent` vocabulary. The EventBus never sees raw SDK events.
+
+### What changes with Claude SDK (does NOT affect streaming)
+
+| Concern | Impact on Streaming | Why |
+|---------|-------------------|-----|
+| Different event type names (`content_block_delta` vs `assistant.message`) | None | Runner normalizes to `notification` before publish |
+| Different token reporting shape | None | Runner normalizes to `usage: {input_tokens, output_tokens, total_tokens}` |
+| Different session/thread ID format | None | `session_id` is opaque string — EventBus doesn't parse it |
+| No subprocess (HTTP API instead of stdio) | None | Runner abstracts transport; AgentEvent interface unchanged |
+| Different approval/permission model | None | Handled by runner, not streaming |
+
+### What changes with Claude SDK (DOES affect streaming — enrichment opportunity)
+
+| Concern | Impact | Design Consideration |
+|---------|--------|---------------------|
+| Richer streaming content (Claude streams token-by-token) | Optional | Could emit higher-frequency `notification` events with partial content. Buffer sizing may need tuning. |
+| Model identification | Additive | `StreamEvent.data` could include `"model": "claude-3.5-sonnet"` or `"copilot"` for observability |
+| Cost tracking (different token pricing per model) | Additive | `usage` dict could include `"model"` field for cost attribution |
+| Runner selection config (`agent.kind: copilot \| claude`) | Config layer | Streaming doesn't care which runner was selected — same event format |
+
+### Design principle: StreamEvent carries SDK provenance but not SDK coupling
+
+To support multi-SDK observability without coupling the streaming layer:
+
+```python
+# StreamEvent.data includes optional provenance field:
+{
+    "event": "notification",
+    "message": "Installing dependencies...",
+    "session_id": "thread-abc-turn-1",
+    "runner": "copilot",       # or "claude" — informational only
+    "model": "gpt-4o",        # or "claude-sonnet-4-20250514" — if available
+    "usage": {"input_tokens": 500, "output_tokens": 200, "total_tokens": 700},
+}
+```
+
+The `runner` and `model` fields are optional enrichment. SSE clients can display them in UI
+but MUST NOT depend on them for protocol correctness. The EventBus treats them as opaque
+payload data.
+
+### Conclusion
+
+**The session streaming design requires zero changes to support Claude SDK.** The architectural
+decision to publish at the `AgentEvent` level (post-normalization) means the EventBus and SSE
+endpoints are inherently multi-SDK. The only work needed is implementing a `ClaudeAgentSession`
+runner that normalizes Claude SDK events into the same `AgentEvent` format — which is a runner
+concern, not a streaming concern.
+
+---
+
 ## 9. Decision Records (ADRs)
 
 ### ADR-1: SSE over WebSocket
