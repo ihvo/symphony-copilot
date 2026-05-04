@@ -18,6 +18,7 @@ from typing import Any
 from symphony import workspace as ws_mod
 from symphony.config import ServiceConfig
 from symphony.errors import SymphonyError
+from symphony.streaming import EventBus, StreamEvent
 from symphony.models import (
     AgentEvent,
     Issue,
@@ -78,6 +79,8 @@ class Orchestrator:
         self._running = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._observers: list[Callable[[], None]] = []
+        # Streaming
+        self._event_bus: EventBus | None = None
         # Dev mode
         self._dev_mode = dev_mode
         self._dev_instance = dev_instance
@@ -100,6 +103,52 @@ class Orchestrator:
 
     def _effective_config(self) -> ServiceConfig | None:
         return self._last_good_config or self._config
+
+    # --- EventBus ---
+
+    def set_event_bus(self, bus: EventBus) -> None:
+        """Inject the event bus for SSE streaming."""
+        self._event_bus = bus
+
+    def resolve_identifier(self, identifier: str) -> str | None:
+        """Resolve a human identifier (e.g. '#42') to an issue_id.
+
+        Scans running entries and retry attempts for a matching identifier.
+        Returns None if not found.
+        """
+        for issue_id, entry in self._state.running.items():
+            if entry.identifier == identifier:
+                return issue_id
+        for issue_id, entry in self._state.retry_attempts.items():
+            if entry.identifier == identifier:
+                return issue_id
+        return None
+
+    def _publish_stream_event(
+        self, event_type: str, entry: RunningEntry, event: AgentEvent
+    ) -> None:
+        """Publish to event bus. Failures are logged but never crash the orchestrator."""
+        if not self._event_bus:
+            return
+        try:
+            self._event_bus.publish(StreamEvent(
+                id=self._event_bus.next_id(),
+                event_type=event_type,
+                issue_id=event.issue_id,
+                issue_identifier=entry.identifier,
+                timestamp=event.timestamp.isoformat() if event.timestamp else "",
+                data={
+                    "event": event.event,
+                    "message": event.message,
+                    "error": event.error,
+                    "session_id": event.session_id,
+                    "turn_id": event.turn_id,
+                    "usage": event.usage,
+                    "rate_limits": event.rate_limits,
+                },
+            ))
+        except Exception:
+            logger.error("event_bus_publish_failed", exc_info=True)
 
     # --- Workflow reload ---
 
@@ -548,6 +597,24 @@ class Orchestrator:
         entry.worker_task = task
         self._state.running[issue.id] = entry
 
+        # Publish session_dispatched to SSE subscribers
+        if self._event_bus:
+            try:
+                self._event_bus.publish(StreamEvent(
+                    id=self._event_bus.next_id(),
+                    event_type="session_dispatched",
+                    issue_id=issue.id,
+                    issue_identifier=issue.identifier,
+                    timestamp=_now_utc().isoformat(),
+                    data={
+                        "event": "session_dispatched",
+                        "attempt": attempt,
+                        "state": issue.state,
+                    },
+                ))
+            except Exception:
+                logger.error("event_bus_publish_failed", exc_info=True)
+
     async def _run_worker(self, issue: Issue, attempt: int | None) -> None:
         """Worker coroutine: workspace + prompt + agent session."""
         cfg = self._effective_config()
@@ -736,6 +803,30 @@ class Orchestrator:
 
         self._notify_observers()
 
+        # Publish session_ended to SSE subscribers
+        if self._event_bus:
+            try:
+                self._event_bus.publish(StreamEvent(
+                    id=self._event_bus.next_id(),
+                    event_type="session_ended",
+                    issue_id=result.issue_id,
+                    issue_identifier=result.identifier,
+                    timestamp=_now_utc().isoformat(),
+                    data={
+                        "event": "session_ended",
+                        "success": result.success,
+                        "error": result.error,
+                        "turns": result.session.turn_count,
+                        "tokens": {
+                            "input_tokens": result.session.copilot_input_tokens,
+                            "output_tokens": result.session.copilot_output_tokens,
+                            "total_tokens": result.session.copilot_total_tokens,
+                        },
+                    },
+                ))
+            except Exception:
+                logger.error("event_bus_publish_failed", exc_info=True)
+
     def _handle_agent_event(self, event: AgentEvent) -> None:
         """Update running entry with agent event data."""
         entry = self._state.running.get(event.issue_id)
@@ -770,6 +861,9 @@ class Orchestrator:
         # Rate limits
         if event.rate_limits:
             self._state.copilot_rate_limits = RateLimitInfo(data=event.rate_limits)
+
+        # Stream to SSE subscribers
+        self._publish_stream_event(event.event or "agent_event", entry, event)
 
     # --- Reconciliation ---
 
@@ -903,6 +997,24 @@ class Orchestrator:
                         "workspace_cleanup_failed issue=%s error=%s", entry.identifier, exc
                     )
 
+        # Publish session_killed to SSE subscribers
+        if self._event_bus:
+            reason = "terminal_state" if cleanup_workspace else "reconciliation"
+            try:
+                self._event_bus.publish(StreamEvent(
+                    id=self._event_bus.next_id(),
+                    event_type="session_killed",
+                    issue_id=issue_id,
+                    issue_identifier=entry.identifier,
+                    timestamp=_now_utc().isoformat(),
+                    data={
+                        "event": "session_killed",
+                        "reason": reason,
+                    },
+                ))
+            except Exception:
+                logger.error("event_bus_publish_failed", exc_info=True)
+
     # --- Retry ---
 
     def _schedule_retry(
@@ -943,6 +1055,25 @@ class Orchestrator:
             timer_handle=timer,
             error=error,
         )
+
+        # Publish retry_scheduled to SSE subscribers
+        if self._event_bus:
+            try:
+                self._event_bus.publish(StreamEvent(
+                    id=self._event_bus.next_id(),
+                    event_type="retry_scheduled",
+                    issue_id=issue_id,
+                    issue_identifier=identifier,
+                    timestamp=_now_utc().isoformat(),
+                    data={
+                        "event": "retry_scheduled",
+                        "attempt": attempt,
+                        "error": error,
+                        "delay_ms": delay_ms,
+                    },
+                ))
+            except Exception:
+                logger.error("event_bus_publish_failed", exc_info=True)
 
     async def _on_retry(self, issue_id: str) -> None:
         """Handle a retry timer firing."""

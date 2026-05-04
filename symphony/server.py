@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 if TYPE_CHECKING:
     from symphony.orchestrator import Orchestrator
+    from symphony.streaming import EventBus, StreamEvent
 
 logger = logging.getLogger("symphony.server")
 
@@ -49,8 +52,9 @@ def _error_response(code: str, message: str, status: int = 400) -> JSONResponse:
 class SymphonyServer:
     """HTTP server extension providing a dashboard and JSON API."""
 
-    def __init__(self, orchestrator: Orchestrator) -> None:
+    def __init__(self, orchestrator: Orchestrator, event_bus: EventBus | None = None) -> None:
         self._orch = orchestrator
+        self._event_bus = event_bus
         self._app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
         # Allow cross-origin requests from the Next.js dev server
         self._app.add_middleware(
@@ -103,6 +107,55 @@ class SymphonyServer:
                     "operations": ["poll", "reconcile"],
                 },
                 status=202,
+            )
+
+        @self._app.get("/api/v1/stream")
+        async def handle_stream_global(request: Request) -> Response:
+            if not self._event_bus:
+                return _error_response(
+                    "streaming_disabled", "Event streaming is not enabled", 503
+                )
+            last_id = _parse_last_event_id(request)
+            replay, queue = self._event_bus.subscribe_global(last_event_id=last_id)
+            return StreamingResponse(
+                _sse_generator(
+                    queue, replay, lambda: self._event_bus.unsubscribe_global(queue)
+                ),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        @self._app.get("/api/v1/stream/{identifier}")
+        async def handle_stream_issue(request: Request, identifier: str) -> Response:
+            if not self._event_bus:
+                return _error_response(
+                    "streaming_disabled", "Event streaming is not enabled", 503
+                )
+            if not identifier.startswith("#"):
+                identifier = f"#{identifier}"
+
+            issue_id = self._orch.resolve_identifier(identifier)
+            if not issue_id:
+                issue_id = self._event_bus.resolve_identifier(identifier)
+            if not issue_id:
+                return _error_response(
+                    "issue_not_found",
+                    f"Issue {identifier} not found in current state",
+                    404,
+                )
+
+            last_id = _parse_last_event_id(request)
+            replay, queue = self._event_bus.subscribe_issue(
+                issue_id, last_event_id=last_id
+            )
+            return StreamingResponse(
+                _sse_generator(
+                    queue,
+                    replay,
+                    lambda: self._event_bus.unsubscribe_issue(issue_id, queue),
+                ),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
         @self._app.get("/api/v1/{identifier}")
@@ -220,3 +273,81 @@ def _render_placeholder() -> str:
     </div>
 </body>
 </html>"""
+
+
+# --- SSE Helpers ---
+
+
+def _parse_last_event_id(request: Request) -> int | None:
+    """Extract and parse the Last-Event-ID header."""
+    raw = request.headers.get("Last-Event-ID")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _format_sse(event: StreamEvent) -> str:
+    """Format a StreamEvent as an SSE message."""
+    data_json = json.dumps(event.data, default=str)
+    return (
+        f"id: {event.id}\n"
+        f"event: {event.event_type}\n"
+        f"data: {data_json}\n\n"
+    )
+
+
+async def _sse_generator(
+    queue: asyncio.Queue[StreamEvent | None],
+    replay: list[StreamEvent] | None,
+    unsubscribe: Callable[[], None],
+) -> AsyncGenerator[str, None]:
+    """Yield SSE-formatted events from replay + live queue.
+
+    Handles:
+    - Gap detection (replay=None means Last-Event-ID is stale)
+    - Replay deduplication (live queue may contain replay items)
+    - Overflow sentinel (None in queue = desynced, close stream)
+    - Keepalive comments every 30s
+    - Cleanup via finally block
+    """
+    last_sent_id = 0
+    try:
+        # Gap detection — client's Last-Event-ID is older than our buffer
+        if replay is None:
+            yield 'event: gap\ndata: {"reason":"history_expired"}\n\n'
+        else:
+            # Phase 1: Replay history
+            for event in replay:
+                last_sent_id = event.id
+                yield _format_sse(event)
+
+        # Phase 2: Live stream
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+            except asyncio.TimeoutError:
+                yield ": keepalive\n\n"
+                continue
+
+            if event is None:
+                # Overflow sentinel — subscriber was desynced
+                yield 'event: overflow\ndata: {"reason":"slow_consumer"}\n\n'
+                break
+
+            # Deduplicate: skip events already sent during replay
+            if event.id <= last_sent_id:
+                continue
+
+            last_sent_id = event.id
+            yield _format_sse(event)
+
+    except asyncio.CancelledError:
+        pass  # Client disconnected — normal cleanup
+    finally:
+        try:
+            unsubscribe()
+        except Exception:
+            pass

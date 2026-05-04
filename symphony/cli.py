@@ -11,6 +11,7 @@ import sys
 from symphony.logging_config import configure_logging
 from symphony.orchestrator import Orchestrator
 from symphony.server import SymphonyServer
+from symphony.streaming import EventBus
 from symphony.workflow import resolve_workflow_path
 
 logger = logging.getLogger("symphony.cli")
@@ -188,7 +189,9 @@ async def _run(args: argparse.Namespace) -> int:
             if port is None and orch.config:
                 port = orch.config.server_port
             if port is not None:
-                server = SymphonyServer(orch)
+                event_bus = EventBus()
+                orch.set_event_bus(event_bus)
+                server = SymphonyServer(orch, event_bus=event_bus)
                 actual_port = await server.start(port)
                 logger.info("server_listening port=%d", actual_port)
 
