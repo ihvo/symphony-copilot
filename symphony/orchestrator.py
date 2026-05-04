@@ -139,7 +139,7 @@ class Orchestrator:
                 timestamp=event.timestamp.isoformat() if event.timestamp else "",
                 data={
                     "event": event.event,
-                    "message": event.message,
+                    "message": (event.message or "")[:500],
                     "error": event.error,
                     "session_id": event.session_id,
                     "turn_id": event.turn_id,
@@ -313,7 +313,10 @@ class Orchestrator:
             logger.info("mock_tracker_seeded count=%d", self._dev_seed)
 
         # 5. Start HTTP server with dev routes
-        server = SymphonyServer(self)
+        from symphony.streaming import EventBus
+        event_bus = EventBus()
+        self.set_event_bus(event_bus)
+        server = SymphonyServer(self, event_bus=event_bus)
         mount_dev_routes(server.app, mock_tracker)
         port = self._cli_port or 0
         actual_port = await server.start(port)
@@ -1014,6 +1017,10 @@ class Orchestrator:
                 ))
             except Exception:
                 logger.error("event_bus_publish_failed", exc_info=True)
+
+        # Clear per-issue history when workspace is cleaned up (issue is terminal)
+        if cleanup_workspace and self._event_bus:
+            self._event_bus.clear_issue(issue_id)
 
     # --- Retry ---
 
