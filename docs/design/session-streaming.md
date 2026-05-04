@@ -907,9 +907,13 @@ async def test_sse_disconnect_during_replay():
 
 ## 8.1 Multi-SDK Implications (Claude SDK Support)
 
-The spec (§10) is written around "the targeted Copilot SDK" but uses language that implies
-SDK-swappability. Adding Claude SDK (Anthropic) support has specific implications for the
-streaming design:
+> **Status:** Claude SDK harness is now implemented (`symphony/claude_runner.py`,
+> `symphony/harness.py`). This section validates the streaming design against the
+> actual implementation.
+
+The `AgentHarness` protocol (see `symphony/harness.py`) defines the contract all harnesses
+implement. The factory in `runner.py:_create_harness()` selects `CopilotHarness` or
+`ClaudeHarness` based on `config.agent_harness` (`"copilot"` | `"claude"`).
 
 ### Why the streaming design is already SDK-agnostic
 
@@ -918,13 +922,14 @@ derived from `AgentEvent`, which is Symphony's internal event vocabulary (SPEC �
 
 ```
 ┌─────────────────────┐     ┌─────────────────────┐
-│ CopilotAgentSession │     │ ClaudeAgentSession  │   (future)
+│   CopilotHarness    │     │    ClaudeHarness    │
+│   (runner.py)       │     │ (claude_runner.py)  │
 │                     │     │                     │
 │ SDK events:         │     │ SDK events:         │
-│ • assistant.usage   │     │ • content_block_*   │
-│ • session.idle      │     │ • message_start     │
-│ • assistant.message │     │ • message_delta     │
-│ • session.error     │     │ • message_stop      │
+│ • assistant.usage   │     │ • AssistantMessage  │
+│ • session.idle      │     │ • ResultMessage     │
+│ • assistant.message │     │ • StreamEvent       │
+│ • session.error     │     │ • RateLimitEvent    │
 └────────┬────────────┘     └────────┬────────────┘
          │ _emit()                   │ _emit()
          ▼                           ▼
@@ -943,31 +948,33 @@ derived from `AgentEvent`, which is Symphony's internal event vocabulary (SPEC �
               └────────────────┘
 ```
 
-**The runner is the normalization adapter.** Each SDK runner translates its SDK-specific event
-types into Symphony's standard `AgentEvent` vocabulary. The EventBus never sees raw SDK events.
+**The harness is the normalization adapter.** Both `CopilotHarness` and `ClaudeHarness` use
+identical `_emit()` patterns to translate SDK-specific events into Symphony's standard
+`AgentEvent` vocabulary. The EventBus never sees raw SDK events.
 
-### What changes with Claude SDK (does NOT affect streaming)
+### Validated: Claude SDK does NOT affect streaming
 
-| Concern | Impact on Streaming | Why |
-|---------|-------------------|-----|
-| Different event type names (`content_block_delta` vs `assistant.message`) | None | Runner normalizes to `notification` before publish |
-| Different token reporting shape | None | Runner normalizes to `usage: {input_tokens, output_tokens, total_tokens}` |
-| Different session/thread ID format | None | `session_id` is opaque string — EventBus doesn't parse it |
-| No subprocess (HTTP API instead of stdio) | None | Runner abstracts transport; AgentEvent interface unchanged |
-| Different approval/permission model | None | Handled by runner, not streaming |
+| Concern | Impact on Streaming | Implementation evidence |
+|---------|-------------------|------------------------|
+| Different SDK event types (`AssistantMessage` vs SDK events) | None | `ClaudeHarness._emit()` normalizes to `AgentEvent` (claude_runner.py:66-80) |
+| Different token reporting shape | None | Both harnesses write to `session.copilot_input_tokens` / `copilot_output_tokens` |
+| Different session/thread ID format | None | `session_id` is opaque string assigned in `start()` |
+| Subprocess vs HTTP API transport | None | Both use `on_event` callback; `run_agent_session()` is transport-agnostic |
+| Different approval/permission model | None | Handled inside harness; events emitted post-approval |
+| Config routing (`agent.harness: copilot \| claude`) | None | Factory in `_create_harness()` selects harness; streaming is downstream |
 
-### What changes with Claude SDK (DOES affect streaming — enrichment opportunity)
+### Enrichment opportunities for multi-harness observability
 
 | Concern | Impact | Design Consideration |
 |---------|--------|---------------------|
 | Richer streaming content (Claude streams token-by-token) | Optional | Could emit higher-frequency `notification` events with partial content. Buffer sizing may need tuning. |
-| Model identification | Additive | `StreamEvent.data` could include `"model": "claude-3.5-sonnet"` or `"copilot"` for observability |
+| Model identification | Additive | `StreamEvent.data` could include `"model": "claude-sonnet-4-20250514"` or `"gpt-4o"` for observability |
 | Cost tracking (different token pricing per model) | Additive | `usage` dict could include `"model"` field for cost attribution |
-| Runner selection config (`agent.kind: copilot \| claude`) | Config layer | Streaming doesn't care which runner was selected — same event format |
+| Harness identification | Additive | `StreamEvent.data` could include `"harness": "copilot" \| "claude"` |
 
-### Design principle: StreamEvent carries SDK provenance but not SDK coupling
+### Design principle: StreamEvent carries harness provenance but not SDK coupling
 
-To support multi-SDK observability without coupling the streaming layer:
+To support multi-harness observability without coupling the streaming layer:
 
 ```python
 # StreamEvent.data includes optional provenance field:
@@ -975,23 +982,24 @@ To support multi-SDK observability without coupling the streaming layer:
     "event": "notification",
     "message": "Installing dependencies...",
     "session_id": "thread-abc-turn-1",
-    "runner": "copilot",       # or "claude" — informational only
-    "model": "gpt-4o",        # or "claude-sonnet-4-20250514" — if available
+    "harness": "copilot",      # or "claude" — informational only
+    "model": "gpt-4o",        # or "claude-sonnet-4-20250514" — from config
     "usage": {"input_tokens": 500, "output_tokens": 200, "total_tokens": 700},
 }
 ```
 
-The `runner` and `model` fields are optional enrichment. SSE clients can display them in UI
-but MUST NOT depend on them for protocol correctness. The EventBus treats them as opaque
-payload data.
+The `harness` and `model` fields are optional enrichment sourced from `config.agent_harness`
+and the harness-specific model config (`config.copilot_model` / `config.claude_model`).
+SSE clients can display them in UI but MUST NOT depend on them for protocol correctness.
+The EventBus treats them as opaque payload data.
 
 ### Conclusion
 
-**The session streaming design requires zero changes to support Claude SDK.** The architectural
-decision to publish at the `AgentEvent` level (post-normalization) means the EventBus and SSE
-endpoints are inherently multi-SDK. The only work needed is implementing a `ClaudeAgentSession`
-runner that normalizes Claude SDK events into the same `AgentEvent` format — which is a runner
-concern, not a streaming concern.
+**The session streaming design requires zero changes to support the Claude SDK harness.**
+The `AgentHarness` protocol ensures both `CopilotHarness` and `ClaudeHarness` emit identical
+`AgentEvent` objects through `_emit()`. The architectural decision to publish at the
+post-normalization layer means the EventBus and SSE endpoints are inherently multi-harness.
+This has been validated against the actual implementation in `symphony/claude_runner.py`.
 
 ---
 
