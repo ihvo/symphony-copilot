@@ -161,6 +161,26 @@ class AgentError(SymphonyError):
     code = "agent_error"
 
 
+class AgentNotFoundError(AgentError):
+    """The agent binary/SDK was not found."""
+
+    code = "agent_not_found"
+
+    def __init__(self, harness: str, detail: str = "") -> None:
+        self.harness = harness
+        super().__init__(f"{harness} agent not found: {detail}")
+
+
+class AgentStartupError(AgentError):
+    """The agent subprocess failed to start or connect."""
+
+    code = "agent_startup_failed"
+
+    def __init__(self, harness: str, detail: str = "") -> None:
+        self.harness = harness
+        super().__init__(f"{harness} agent startup failed: {detail}")
+
+
 class CopilotNotFoundError(AgentError):
     code = "copilot_not_found"
 

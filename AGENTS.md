@@ -1,14 +1,15 @@
 # AGENTS.md
 
-Symphony is a Python asyncio service that polls GitHub Issues, creates per-issue workspaces, and runs Copilot SDK agent sessions. Spec: `SPEC.md`. Entry point: `symphony/cli.py`.
+Symphony is a Python asyncio service that polls GitHub Issues, creates per-issue workspaces, and runs coding agent sessions via pluggable harnesses (Copilot SDK, Claude Agent SDK). Spec: `SPEC.md`. Entry point: `symphony/cli.py`.
 
 ## Setup and Run
 
 1. `uv sync`
-2. `uv run pytest` — runs all 206 tests (~30s)
+2. `uv run pytest` — runs all tests (~12s)
 3. `uv run pytest tests/ -q` — unit tests only (<1s)
 4. `uv run symphony WORKFLOW.md` — run the service
 5. `uv run symphony WORKFLOW.md --port 8080` — with HTTP dashboard
+6. `uv sync --extra claude` — install with Claude SDK support
 
 ### Dashboard (optional — requires Node.js 18+)
 
@@ -43,7 +44,9 @@ workflow.py      → parses WORKFLOW.md → {config map, prompt body}
 prompt.py        → Jinja2 strict-mode rendering
 tracker.py       → GitHub Issues REST client via httpx (paginate, normalize, refresh)
 workspace.py     → per-issue directory lifecycle + hook execution + safety checks
-runner.py        → Copilot SDK JSONRPC-over-stdio subprocess (multi-turn)
+harness.py       → AgentHarness Protocol (contract for all harness implementations)
+runner.py        → CopilotHarness + harness factory + run_agent_session entry point
+claude_runner.py → ClaudeHarness (Claude Agent SDK implementation)
 server.py        → optional FastAPI HTTP extension (dashboard + /api/v1/*)
 models.py        → dataclasses (Issue, RunningEntry, RetryEntry, OrchestratorState, …)
 errors.py        → typed error hierarchy with stable .code strings
@@ -60,10 +63,19 @@ dashboard/       → Next.js 15 static-export frontend (see dashboard/AGENTS.md)
 
 ### Adding a new agent protocol event
 
-1. Handle the event type in `CopilotSession.run_turn()` in `runner.py`.
+1. Handle the event type in the harness's `run_turn()` or event handler method.
 2. Emit via `self._emit("event_name", ...)` so the orchestrator receives it.
 3. If it affects orchestrator state, update `_handle_agent_event()` in `orchestrator.py`.
 4. Add a behavior to `tests/integration/mock_agent.py` and write an integration test.
+
+### Adding a new agent harness
+
+1. Create `symphony/<name>_runner.py` implementing the `AgentHarness` protocol from `harness.py`.
+2. Add the harness name to `_create_harness()` factory in `runner.py`.
+3. Add harness-specific config properties to `config.py` (follow `claude_*` pattern).
+4. Update `validate_dispatch()` to accept the new harness name.
+5. Add the SDK as an optional dependency in `pyproject.toml`.
+6. Write unit tests in `tests/test_<name>_runner.py`.
 
 ### Adding a new workspace hook
 
@@ -85,6 +97,8 @@ dashboard/       → Next.js 15 static-export frontend (see dashboard/AGENTS.md)
 | New dashboard component | `dashboard/src/components/` — see `dashboard/AGENTS.md` |
 | New React hook | `dashboard/src/hooks/` |
 | Dashboard test | `dashboard/src/__tests__/` — Vitest + RTL |
+| New agent harness | `<name>_runner.py` — implement `AgentHarness` Protocol |
+| Harness Protocol change | `harness.py` — update Protocol + all implementations |
 
 ## Critical Invariants
 

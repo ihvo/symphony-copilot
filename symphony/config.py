@@ -150,6 +150,28 @@ class ServiceConfig:
     # --- agent ---
 
     @property
+    def agent_harness(self) -> str:
+        """Which agent harness to use: 'copilot' or 'claude'."""
+        raw = self._raw.get("agent", {})
+        val = raw.get("harness", "copilot") if isinstance(raw, dict) else "copilot"
+        result = str(val).lower().strip()
+        return result if result else "copilot"
+
+    @property
+    def agent_turn_timeout_ms(self) -> int:
+        """Turn timeout for the active harness (dispatches to copilot/claude section)."""
+        if self.agent_harness == "claude":
+            return self.claude_turn_timeout_ms
+        return self.copilot_turn_timeout_ms
+
+    @property
+    def agent_stall_timeout_ms(self) -> int:
+        """Stall timeout for the active harness (dispatches to copilot/claude section)."""
+        if self.agent_harness == "claude":
+            return self.claude_stall_timeout_ms
+        return self.copilot_stall_timeout_ms
+
+    @property
     def max_concurrent_agents(self) -> int:
         val = _get(self._raw, "agent", "max_concurrent_agents", default=10)
         try:
@@ -236,6 +258,73 @@ class ServiceConfig:
         except (TypeError, ValueError):
             return 300000
 
+    # --- claude ---
+
+    @property
+    def claude_command(self) -> str:
+        """Claude CLI command (for subprocess launch / test mocking)."""
+        sec = self._raw.get("claude", {})
+        if not isinstance(sec, dict):
+            return "claude"
+        return str(sec.get("command", "claude")).strip() or "claude"
+
+    @property
+    def claude_turn_timeout_ms(self) -> int:
+        sec = self._raw.get("claude", {})
+        if not isinstance(sec, dict):
+            return 3600000
+        try:
+            val = int(sec.get("turn_timeout_ms", 3600000))
+            return val if val > 0 else 3600000
+        except (TypeError, ValueError):
+            return 3600000
+
+    @property
+    def claude_stall_timeout_ms(self) -> int:
+        sec = self._raw.get("claude", {})
+        if not isinstance(sec, dict):
+            return 300000
+        try:
+            return int(sec.get("stall_timeout_ms", 300000))
+        except (TypeError, ValueError):
+            return 300000
+
+    @property
+    def claude_system_prompt(self) -> str | None:
+        sec = self._raw.get("claude", {})
+        if not isinstance(sec, dict):
+            return None
+        val = sec.get("system_prompt")
+        return str(val) if val is not None else None
+
+    @property
+    def claude_allowed_tools(self) -> list[str]:
+        sec = self._raw.get("claude", {})
+        if not isinstance(sec, dict):
+            return []
+        tools = sec.get("allowed_tools")
+        if isinstance(tools, list):
+            return [str(t) for t in tools]
+        return []
+
+    @property
+    def claude_model(self) -> str | None:
+        sec = self._raw.get("claude", {})
+        if not isinstance(sec, dict):
+            return None
+        val = sec.get("model")
+        return str(val) if val else None
+
+    @property
+    def claude_permission_mode(self) -> str:
+        """Valid: default, acceptEdits, plan, bypassPermissions, dontAsk, auto."""
+        sec = self._raw.get("claude", {})
+        if not isinstance(sec, dict):
+            return "auto"
+        val = str(sec.get("permission_mode", "auto")).strip()
+        valid = ("default", "acceptEdits", "plan", "bypassPermissions", "dontAsk", "auto")
+        return val if val in valid else "auto"
+
     # --- server (extension) ---
 
     @property
@@ -261,4 +350,18 @@ class ServiceConfig:
             errors.append("tracker.api_key is missing after $VAR resolution")
         if self.tracker_kind == "github" and not self.tracker_repo:
             errors.append("tracker.repo is required when tracker.kind is 'github'")
+
+        # Validate agent harness
+        harness = self.agent_harness
+        if harness not in ("copilot", "claude"):
+            errors.append(f"agent.harness must be 'copilot' or 'claude', got {harness!r}")
+
+        if harness == "claude":
+            try:
+                import claude_agent_sdk  # noqa: F401
+            except ImportError:
+                errors.append(
+                    "agent.harness is 'claude' but claude-agent-sdk is not installed"
+                )
+
         return errors

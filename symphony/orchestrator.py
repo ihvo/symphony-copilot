@@ -583,7 +583,7 @@ class Orchestrator:
 
     async def _reconcile_stalls(self, cfg: ServiceConfig) -> None:
         """Kill stalled sessions."""
-        stall_timeout_ms = cfg.copilot_stall_timeout_ms
+        stall_timeout_ms = cfg.agent_stall_timeout_ms
         if stall_timeout_ms <= 0:
             return
 

@@ -12,6 +12,10 @@ dependencies = [
     "github-copilot-sdk>=0.3.0",
 ]
 
+[project.optional-dependencies]
+claude = ["claude-agent-sdk>=0.1"]
+all = ["claude-agent-sdk>=0.1"]
+
 [dependency-groups]
 dev = [
     "pytest>=7",
