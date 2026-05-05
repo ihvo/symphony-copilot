@@ -4,6 +4,7 @@ import { MetricsGrid } from "@/components/metrics-grid";
 import { RunningTable } from "@/components/running-table";
 import { RetryTable } from "@/components/retry-table";
 import { ConnectionStatus } from "@/components/connection-status";
+import { StreamPanel } from "@/components/stream-panel";
 
 export default function DashboardPage() {
   return (
@@ -29,6 +30,15 @@ export default function DashboardPage() {
           </h2>
         </div>
         <RetryTable />
+      </section>
+
+      <section aria-label="Event stream" className="mt-8">
+        <div className="flex items-baseline gap-2 mb-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-950">
+            Live Events
+          </h2>
+        </div>
+        <StreamPanel />
       </section>
     </>
   );
