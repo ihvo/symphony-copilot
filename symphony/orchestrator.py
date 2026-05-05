@@ -775,19 +775,29 @@ class Orchestrator:
 
         if result.success:
             self._state.completed.add(result.issue_id)
-            # Schedule continuation retry
-            self._schedule_retry(
-                result.issue_id,
-                attempt=1,
-                identifier=result.identifier,
-                error=None,
-                delay_ms=_CONTINUATION_DELAY_MS,
-            )
-            logger.info(
-                "worker_succeeded issue_id=%s issue_identifier=%s",
-                result.issue_id,
-                result.identifier,
-            )
+
+            if self._dev_mode:
+                # In dev mode, keep claim to prevent re-dispatch — mock issues
+                # never close, so without this they loop forever.
+                logger.info(
+                    "worker_succeeded_dev issue_id=%s issue_identifier=%s (claim held, no retry)",
+                    result.issue_id,
+                    result.identifier,
+                )
+            else:
+                # Schedule continuation retry
+                self._schedule_retry(
+                    result.issue_id,
+                    attempt=1,
+                    identifier=result.identifier,
+                    error=None,
+                    delay_ms=_CONTINUATION_DELAY_MS,
+                )
+                logger.info(
+                    "worker_succeeded issue_id=%s issue_identifier=%s",
+                    result.issue_id,
+                    result.identifier,
+                )
         else:
             next_attempt = (entry.retry_attempt or 0) + 1 if entry else 1
             self._schedule_retry(
