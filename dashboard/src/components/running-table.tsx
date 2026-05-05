@@ -84,7 +84,7 @@ export function RunningTable({
               const isSelected = selectedIdentifier === session.issue_identifier;
               return (
                 <tr
-                  key={session.session_id}
+                  key={session.issue_id}
                   onClick={() => onSelectSession?.(session.issue_identifier)}
                   className={`transition-colors ${
                     onSelectSession ? "cursor-pointer" : ""
