@@ -4,7 +4,7 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import type { StreamEvent, StreamEventData, ConnectionState } from "@/lib/stream-types";
 
 const MAX_EVENTS = 200;
-const STREAM_URL = "/api/v1/stream";
+const STREAM_BASE = "/api/v1/stream";
 
 const EVENT_TYPES = [
   "session_dispatched",
@@ -19,7 +19,13 @@ const EVENT_TYPES = [
   "overflow",
 ];
 
-export function useEventStream(onEvent?: (event: StreamEvent) => void) {
+/**
+ * Connect to the SSE event stream.
+ * @param identifier - Optional issue identifier (e.g. "#1") for per-issue streaming.
+ *                     When undefined, connects to the global stream.
+ * @param onEvent - Optional callback fired on each received event.
+ */
+export function useEventStream(identifier?: string, onEvent?: (event: StreamEvent) => void) {
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
   const sourceRef = useRef<EventSource | null>(null);
@@ -32,9 +38,13 @@ export function useEventStream(onEvent?: (event: StreamEvent) => void) {
       sourceRef.current.close();
     }
 
+    const base = identifier
+      ? `${STREAM_BASE}/${encodeURIComponent(identifier)}`
+      : STREAM_BASE;
+
     const url = lastEventIdRef.current != null
-      ? `${STREAM_URL}?lastEventId=${lastEventIdRef.current}`
-      : STREAM_URL;
+      ? `${base}?lastEventId=${lastEventIdRef.current}`
+      : base;
 
     const source = new EventSource(url);
     sourceRef.current = source;
@@ -46,10 +56,8 @@ export function useEventStream(onEvent?: (event: StreamEvent) => void) {
 
     source.onerror = () => {
       setConnectionState("disconnected");
-      // EventSource auto-reconnects — we just track state
     };
 
-    // Register typed event listeners
     for (const eventType of EVENT_TYPES) {
       source.addEventListener(eventType, (e: MessageEvent) => {
         let data: StreamEventData;
@@ -79,7 +87,7 @@ export function useEventStream(onEvent?: (event: StreamEvent) => void) {
         onEventRef.current?.(streamEvent);
       });
     }
-  }, []);
+  }, [identifier]);
 
   const disconnect = useCallback(() => {
     if (sourceRef.current) {
@@ -93,7 +101,10 @@ export function useEventStream(onEvent?: (event: StreamEvent) => void) {
     setEvents([]);
   }, []);
 
+  // Reconnect when identifier changes
   useEffect(() => {
+    lastEventIdRef.current = null;
+    setEvents([]);
     connect();
     return () => {
       disconnect();

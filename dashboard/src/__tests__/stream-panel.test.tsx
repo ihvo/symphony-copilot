@@ -30,6 +30,17 @@ describe("StreamPanel", () => {
     expect(screen.getByText("Event Stream")).toBeInTheDocument();
   });
 
+  it("shows per-issue title when identifier is set", () => {
+    render(<StreamPanel identifier="#42" />);
+    expect(screen.getByText("Stream: #42")).toBeInTheDocument();
+  });
+
+  it("shows Show all button when identifier is set", () => {
+    const onDeselect = vi.fn();
+    render(<StreamPanel identifier="#1" onDeselect={onDeselect} />);
+    expect(screen.getByText("Show all")).toBeInTheDocument();
+  });
+
   it("shows Live indicator when connected", () => {
     render(<StreamPanel />);
     expect(screen.getByText("Live")).toBeInTheDocument();

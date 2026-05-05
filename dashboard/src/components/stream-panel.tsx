@@ -24,20 +24,35 @@ function StreamStatus({ state, eventCount }: { state: ConnectionState; eventCoun
   );
 }
 
-export function StreamPanel() {
+export function StreamPanel({
+  identifier,
+  onDeselect,
+}: {
+  identifier?: string;
+  onDeselect?: () => void;
+}) {
   const { refresh } = useStatePolling();
-  const { events, connectionState, clearEvents } = useEventStream(() => {
-    // Refresh SWR state on each streaming event for realtime dashboard updates
+  const { events, connectionState, clearEvents } = useEventStream(identifier, () => {
     refresh();
   });
+
+  const title = identifier ? `Stream: ${identifier}` : "Event Stream";
 
   return (
     <div className="bg-surface border border-border rounded-[var(--radius-card)] shadow-[var(--shadow-card)] overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-3">
           <h3 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-zinc-400">
-            Event Stream
+            {title}
           </h3>
+          {identifier && onDeselect && (
+            <button
+              onClick={onDeselect}
+              className="text-[0.6875rem] font-medium text-zinc-400 hover:text-zinc-600 transition-colors"
+            >
+              Show all
+            </button>
+          )}
           <StreamStatus state={connectionState} eventCount={events.length} />
         </div>
         {events.length > 0 && (
