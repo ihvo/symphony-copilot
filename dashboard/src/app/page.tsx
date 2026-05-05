@@ -1,11 +1,23 @@
 "use client";
 
+import { useState, useCallback } from "react";
 import { MetricsGrid } from "@/components/metrics-grid";
 import { RunningTable } from "@/components/running-table";
 import { RetryTable } from "@/components/retry-table";
 import { ConnectionStatus } from "@/components/connection-status";
+import { StreamPanel } from "@/components/stream-panel";
 
 export default function DashboardPage() {
+  const [selectedIdentifier, setSelectedIdentifier] = useState<string | undefined>();
+
+  const handleSelectSession = useCallback((identifier: string) => {
+    setSelectedIdentifier((prev) => (prev === identifier ? undefined : identifier));
+  }, []);
+
+  const handleDeselect = useCallback(() => {
+    setSelectedIdentifier(undefined);
+  }, []);
+
   return (
     <>
       <header className="grid grid-cols-[1fr_auto] items-end gap-4 mb-8 pb-6 border-b border-border">
@@ -19,7 +31,10 @@ export default function DashboardPage() {
         <div className="flex items-baseline gap-2 mb-3">
           <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-950">Running</h2>
         </div>
-        <RunningTable />
+        <RunningTable
+          selectedIdentifier={selectedIdentifier}
+          onSelectSession={handleSelectSession}
+        />
       </section>
 
       <section aria-label="Retry queue">
@@ -29,6 +44,15 @@ export default function DashboardPage() {
           </h2>
         </div>
         <RetryTable />
+      </section>
+
+      <section aria-label="Event stream" className="mt-8">
+        <div className="flex items-baseline gap-2 mb-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-950">
+            Live Events
+          </h2>
+        </div>
+        <StreamPanel identifier={selectedIdentifier} onDeselect={handleDeselect} />
       </section>
     </>
   );

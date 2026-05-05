@@ -197,7 +197,7 @@ Keep `_render_dashboard()` as a Python f-string with inline vanilla JS.
 │    └── /stream        → Live event stream panel (future)        │
 │                                                                  │
 │  Data fetching: SWR with 10s revalidation interval              │
-│  Future streaming: EventSource → /api/v1/events (SSE)           │
+│  Future streaming: EventSource → /api/v1/stream (SSE)           │
 └───────────────────────────┬─────────────────────────────────────┘
                             │ fetch / EventSource
                             ▼
@@ -207,7 +207,7 @@ Keep `_render_dashboard()` as a Python f-string with inline vanilla JS.
 │    /api/v1/state   → JSON snapshot                               │
 │    /api/v1/{id}    → JSON issue detail                           │
 │    /api/v1/refresh → trigger poll                                │
-│    /api/v1/events  → SSE stream (future)                        │
+│    /api/v1/stream  → SSE stream (future)                        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -519,7 +519,7 @@ export function EventStream() {
   const [events, setEvents] = useState<AgentEvent[]>([])
 
   useEffect(() => {
-    const source = new EventSource('/api/v1/events')
+    const source = new EventSource('/api/v1/stream')
     source.onmessage = (e) => {
       const event = JSON.parse(e.data) as AgentEvent
       setEvents(prev => [event, ...prev].slice(0, 100)) // keep last 100
@@ -594,7 +594,7 @@ export function EventStream() {
 
 ### Phase 5: Streaming (Future)
 
-- Add SSE endpoint `/api/v1/events` to FastAPI (emit from orchestrator event loop)
+- Add SSE endpoint `/api/v1/stream` to FastAPI (emit from orchestrator event loop)
 - Implement `EventStream` component with `EventSource`
 - Live event log panel with auto-scroll and filters
 - Session timeline with real-time updates
@@ -734,7 +734,7 @@ export function EventStream() {
 
 **Context:** Future streaming of agent events needs a real-time transport.
 
-**Decision:** Use Server-Sent Events (SSE) via a new `/api/v1/events` endpoint.
+**Decision:** Use Server-Sent Events (SSE) via a new `/api/v1/stream` endpoint (see `docs/design/session-streaming.md` for full specification).
 
 **Rationale:** SSE is simpler than WebSocket for unidirectional server→client data. Works through proxies and load balancers without special configuration. Native browser `EventSource` API with automatic reconnection. FastAPI supports SSE via `StreamingResponse`.
 

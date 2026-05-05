@@ -35,7 +35,13 @@ function EmptyState() {
   );
 }
 
-export function RunningTable() {
+export function RunningTable({
+  selectedIdentifier,
+  onSelectSession,
+}: {
+  selectedIdentifier?: string;
+  onSelectSession?: (identifier: string) => void;
+}) {
   const { state, isLoading } = useStatePolling();
 
   if (isLoading || !state) return <TableSkeleton />;
@@ -74,26 +80,39 @@ export function RunningTable() {
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100">
-            {state.running.map((session) => (
-              <tr key={session.session_id} className="hover:bg-zinc-50/50 transition-colors">
-                <td className="px-4 py-3 font-semibold text-accent">{session.issue_identifier}</td>
-                <td className="px-4 py-3">
-                  <StatusBadge status={session.state} />
-                </td>
-                <td className="px-4 py-3 font-mono text-xs text-zinc-500 max-w-32 truncate">
-                  {session.session_id}
-                </td>
-                <td className="px-4 py-3 font-mono text-xs text-zinc-500">{session.turn_count}</td>
-                <td className="px-4 py-3 text-zinc-600 text-xs">{session.last_event}</td>
-                <td className="px-4 py-3 text-zinc-500 text-xs max-w-48 truncate">
-                  {session.last_message}
-                </td>
-                <td className="px-4 py-3 font-mono text-xs text-zinc-500">{session.started_at}</td>
-                <td className="px-4 py-3 font-mono text-xs text-zinc-500">
-                  {session.tokens.total_tokens.toLocaleString()}
-                </td>
-              </tr>
-            ))}
+            {state.running.map((session) => {
+              const isSelected = selectedIdentifier === session.issue_identifier;
+              return (
+                <tr
+                  key={session.issue_id}
+                  onClick={() => onSelectSession?.(session.issue_identifier)}
+                  className={`transition-colors ${
+                    onSelectSession ? "cursor-pointer" : ""
+                  } ${
+                    isSelected
+                      ? "bg-accent-subtle"
+                      : "hover:bg-zinc-50/50"
+                  }`}
+                >
+                  <td className="px-4 py-3 font-semibold text-accent">{session.issue_identifier}</td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={session.state} />
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs text-zinc-500 max-w-32 truncate">
+                    {session.session_id}
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs text-zinc-500">{session.turn_count}</td>
+                  <td className="px-4 py-3 text-zinc-600 text-xs">{session.last_event}</td>
+                  <td className="px-4 py-3 text-zinc-500 text-xs max-w-48 truncate">
+                    {session.last_message}
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs text-zinc-500">{session.started_at}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-zinc-500">
+                    {session.tokens.total_tokens.toLocaleString()}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
